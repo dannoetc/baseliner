@@ -1,0 +1,42 @@
+# --- Python virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+server/.venv/**
+**/.venv/
+**/venv/
+**/env/
+**/ENV/
+
+# --- Python cache / build artifacts ---
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Coverage / test reports ---
+.coverage*
+htmlcov/
+coverage.xml
+
+# --- VS Code (optional; keep workspace settings if you prefer) ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.lo*

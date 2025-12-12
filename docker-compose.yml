@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: baseliner-db
+    environment:
+      POSTGRES_USER: baseliner
+      POSTGRES_PASSWORD: baseliner
+      POSTGRES_DB: baseliner
+    ports:
+      - "5432:5432"
+    volumes:
+      - baseliner_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U baseliner -d baseliner"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  baseliner_pg:
