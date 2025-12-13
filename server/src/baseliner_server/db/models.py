@@ -156,6 +156,8 @@ class Run(Base):
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    
+    effective_policy_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), nullable=False, default=RunStatus.running)
 

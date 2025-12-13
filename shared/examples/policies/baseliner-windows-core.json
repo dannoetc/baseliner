@@ -1,0 +1,27 @@
+{
+    "schemaVersion": "1.0",
+    "policyId": "baseliner-windows-core",
+    "name": "Baseliner Windows Core",
+    "resources": [
+        {
+            "type": "winget.package",
+            "id": "Mozilla.Firefox",
+            "ensure": "present",
+            "minVersion": "120.0.0",
+            "allowUpgrade": true
+        },
+        {
+            "type": "winget.package",
+            "id": "7zip.7zip",
+            "ensure": "present",
+            "allowUpgrade": true
+        },
+        {
+            "type": "script.powershell",
+            "id": "timezone",
+            "name": "Set Time Zone to Eastern",
+            "detect": "if ((Get-TimeZone).Id -eq 'Eastern Standard Time') { exit 0 } else { exit 1 }",
+            "remediate": "Set-TimeZone -Id 'Eastern Standard Time'"
+        }
+    ]
+}
