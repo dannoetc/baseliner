@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from .agent import enroll_device, run_once
-from .state import default_state_dir
+from .state import default_state_dir, AgentState
 from .config import load_config, default_config_path, merge_tags
 from .winget import configure_winget
+from .agent_health import build_health, write_health
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +45,13 @@ def main(argv: list[str] | None = None) -> int:
     p_cfg = sub.add_parser("config", help="Configuration utilities (show resolved config)")
     cfg_sub = p_cfg.add_subparsers(dest="config_cmd", required=True)
     cfg_sub.add_parser("show", help="Print resolved configuration (secrets redacted)")
+
+    # HEALTH
+    p_h = sub.add_parser("health", help="Agent health utilities (health.json)")
+    h_sub = p_h.add_subparsers(dest="health_cmd", required=True)
+    h_sub.add_parser("show", help="Print current agent health JSON (computed locally)")
+    h_write = h_sub.add_parser("write", help="Write health.json to state dir (atomic)")
+    h_write.add_argument("--path", default="", help="Optional output path (default: <state-dir>\\health.json)")
 
     # ENROLL
     p_enroll = sub.add_parser("enroll", help="Enroll this device using a one-time enrollment token")
@@ -113,6 +121,17 @@ def main(argv: list[str] | None = None) -> int:
 
             print(json.dumps(_redact_config_for_print(cfg2), indent=2, sort_keys=True))
             return 0
+
+        if args.cmd == "health":
+            st = AgentState.load(state_dir)
+            if args.health_cmd == "show":
+                print(json.dumps(build_health(state_dir, state=st), indent=2, sort_keys=True))
+                return 0
+            if args.health_cmd == "write":
+                out = args.path.strip() or None
+                path = write_health(state_dir, state=st, path=out)
+                print(str(path))
+                return 0
 
         if args.cmd == "enroll":
             tags_cli = _parse_tags(args.tags)
