@@ -22,7 +22,7 @@ def queue_report(state_dir: str, payload: dict[str, Any]) -> Path:
     qdir = ensure_queue_dir(state_dir)
     rid = str(uuid.uuid4())
     path = qdir / f"{rid}.json"
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8-sig")
     return path
 
 
