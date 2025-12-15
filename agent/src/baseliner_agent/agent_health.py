@@ -14,6 +14,45 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """
+    Normalize datetimes to tz-aware UTC.
+    Treat naive datetimes as UTC (common when coming from sqlite/test contexts).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _to_utc_iso(v: Any) -> Any:
+    """
+    Make values JSON-safe and timezone-consistent:
+      - datetime -> ISO8601 in UTC
+      - ISO strings pass through (optionally normalized if parsable)
+      - everything else unchanged
+    """
+    if v is None:
+        return None
+
+    if isinstance(v, datetime):
+        dt = _as_utc(v)
+        return dt.isoformat() if dt else None
+
+    if isinstance(v, str):
+        # Attempt to normalize common ISO variants (including trailing 'Z')
+        s = v.strip()
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            dt = _as_utc(dt)
+            return dt.isoformat() if dt else v
+        except Exception:
+            return v
+
+    return v
+
+
 def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8-sig") -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding=encoding)
@@ -67,13 +106,13 @@ def build_health(state_dir: str | Path, state: AgentState | None = None) -> dict
         "agent_version": st.agent_version,
         "server_url": st.last_server_url,
         "run": {
-            "last_run_at": st.last_run_at,
-            "last_success_at": st.last_success_at,
-            "last_failed_at": st.last_failed_at,
+            "last_run_at": _to_utc_iso(st.last_run_at),
+            "last_success_at": _to_utc_iso(st.last_success_at),
+            "last_failed_at": _to_utc_iso(st.last_failed_at),
             "consecutive_failures": int(st.consecutive_failures or 0),
             "last_run_status": st.last_run_status,
             "last_run_exit": st.last_run_exit,
-            "last_http_ok_at": st.last_http_ok_at,
+            "last_http_ok_at": _to_utc_iso(st.last_http_ok_at),
         },
         "policy": {
             "last_applied_policy_hash": st.last_applied_policy_hash,
