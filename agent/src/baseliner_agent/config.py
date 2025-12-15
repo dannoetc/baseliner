@@ -14,16 +14,15 @@ except Exception:  # pragma: no cover
 @dataclass
 class AgentConfig:
     server_url: str | None = None
-    enroll_token: str | None = None  # optional; you may prefer CLI-only for one-time tokens
+    enroll_token: str | None = None
     poll_interval_seconds: int = 900
     log_level: str = "info"
     tags: dict[str, Any] = field(default_factory=dict)
     state_dir: str | None = None
-    winget_path: str | None = None  # reserved for later
+    winget_path: str | None = None
 
 
 def default_config_path() -> Path:
-    # Keep config next to state by default
     programdata = os.environ.get("ProgramData") or r"C:\ProgramData"
     return Path(programdata) / "Baseliner" / "agent.toml"
 
@@ -48,7 +47,11 @@ def _read_toml(path: Path) -> dict[str, Any]:
         return {}
     if tomllib is None:
         raise RuntimeError("tomllib not available; use Python 3.11+ or switch config format.")
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+
+    # IMPORTANT: tolerate UTF-8 BOM (common when edited in some Windows tools)
+    text = path.read_text(encoding="utf-8-sig")
+
+    data = tomllib.loads(text)
     if not isinstance(data, dict):
         return {}
     return data
@@ -94,8 +97,7 @@ def load_config(
     if isinstance(tags_val, dict):
         cfg.tags = dict(tags_val)
 
-    # Env overrides
-    # (Intentionally tolerant; ignore bad values rather than crash.)
+    # Env overrides (tolerant; ignore bad values rather than crash)
     if env.get("BASELINER_SERVER_URL"):
         cfg.server_url = env["BASELINER_SERVER_URL"].strip() or cfg.server_url
 

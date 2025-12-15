@@ -11,6 +11,7 @@ from typing import Any
 from .agent import enroll_device, run_once
 from .state import default_state_dir
 from .config import load_config, default_config_path, merge_tags
+from .winget import configure_winget
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,6 +22,9 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg_path = Path(pre_args.config).expanduser() if pre_args.config else default_config_path()
     cfg = load_config(cfg_path)
+
+    # Apply winget config ASAP so agent run uses SYSTEM-safe winget path if configured.
+    configure_winget(getattr(cfg, "winget_path", None))
 
     parser = argparse.ArgumentParser(prog="baseliner-agent", description="Baseliner Windows agent (MVP)")
     parser.add_argument(
@@ -47,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         "--server",
         required=(cfg.server_url is None),
         default=cfg.server_url,
-        help="Baseliner server base URL (e.g., http://localhost:8000)",
+        help="Baseliner server base URL (e.g. http://localhost:8000)",
     )
     p_enroll.add_argument(
         "--enroll-token",
@@ -55,11 +59,11 @@ def main(argv: list[str] | None = None) -> int:
         default=cfg.enroll_token,
         help="One-time enroll token minted by admin endpoint",
     )
-    p_enroll.add_argument("--device-key", required=True, help="Stable unique device key (e.g., hostname or asset tag)")
+    p_enroll.add_argument("--device-key", required=True, help="Stable unique device key (e.g. hostname or asset tag)")
     p_enroll.add_argument(
         "--tags",
         default="",
-        help="Comma-separated tags as key=value pairs (e.g., env=dev,site=denver)",
+        help="Comma-separated tags as key=value pairs (e.g. env=dev,site=denver)",
     )
 
     # RUN-ONCE
@@ -68,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         "--server",
         required=(cfg.server_url is None),
         default=cfg.server_url,
-        help="Baseliner server base URL (e.g., http://localhost:8000)",
+        help="Baseliner server base URL (e.g. http://localhost:8000)",
     )
     p_run.add_argument("--force", action="store_true", help="Run even if effectivePolicyHash unchanged")
 
@@ -78,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         "--server",
         required=(cfg.server_url is None),
         default=cfg.server_url,
-        help="Baseliner server base URL (e.g., http://localhost:8000)",
+        help="Baseliner server base URL (e.g. http://localhost:8000)",
     )
     p_loop.add_argument(
         "--interval",
@@ -101,9 +105,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "config" and args.config_cmd == "show":
             # Re-load config based on the resolved --config (in case user passed it after pre-parse)
             cfg2 = load_config(Path(args.config).expanduser())
-            # Apply final state_dir defaulting as the CLI does
             if not cfg2.state_dir:
                 cfg2.state_dir = str(default_state_dir())
+
+            # Keep winget configured consistently with what we're showing.
+            configure_winget(getattr(cfg2, "winget_path", None))
+
             print(json.dumps(_redact_config_for_print(cfg2), indent=2, sort_keys=True))
             return 0
 
@@ -144,7 +151,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
-
 def _parse_tags(s: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if not s.strip():
@@ -158,8 +164,8 @@ def _parse_tags(s: str) -> dict[str, Any]:
             out[k.strip()] = v.strip()
     return out
 
+
 def _redact_config_for_print(cfg: Any) -> dict[str, Any]:
-    # cfg is AgentConfig
     d = {
         "server_url": cfg.server_url,
         "enroll_token": "***redacted***" if getattr(cfg, "enroll_token", None) else None,

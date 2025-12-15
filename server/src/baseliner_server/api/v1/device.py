@@ -13,6 +13,8 @@ from baseliner_server.core.policy_hash import compute_effective_policy_hash
 from baseliner_server.db.models import Device, LogEvent, Policy, PolicyAssignment, Run, RunItem
 from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.report import SubmitReportRequest, SubmitReportResponse
+from baseliner_server.db.models import StepStatus
+
 
 router = APIRouter(tags=["device"])
 
@@ -20,6 +22,20 @@ router = APIRouter(tags=["device"])
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+def _coerce_step_status(value: str | None) -> StepStatus:
+    """
+    Accept legacy/agent strings and map to DB enum values.
+    DB StepStatus allows: not_run, ok, fail, skipped
+    """
+    v = (value or "").strip().lower()
+    if v in ("", "none"):
+        return StepStatus.not_run
+    if v == "failed":
+        v = "fail"
+    try:
+        return StepStatus(v)  # type: ignore[arg-type]
+    except Exception:
+        return StepStatus.not_run
 
 def normalize_policy_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     """
@@ -138,9 +154,9 @@ def submit_report(
             compliant_after=item.compliant_after,
             changed=item.changed,
             reboot_required=item.reboot_required,
-            status_detect=item.status_detect,
-            status_remediate=item.status_remediate,
-            status_validate=item.status_validate,
+            status_detect=_coerce_step_status(item.status_detect),
+            status_remediate=_coerce_step_status(item.status_remediate),
+            status_validate=_coerce_step_status(item.status_validate),
             started_at=item.started_at,
             ended_at=item.ended_at,
             evidence=item.evidence or {},

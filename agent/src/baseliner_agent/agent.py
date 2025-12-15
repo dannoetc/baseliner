@@ -211,7 +211,7 @@ def _run_script_powershell(res: dict[str, Any], ordinal: int, mode: str) -> tupl
             "stderr": truncate(det.stderr),
         }
     }
-    status_detect = "ok" if det.exit_code == 0 else "failed"
+    status_detect = "ok" if det.exit_code == 0 else "fail"
 
     status_remediate = "skipped"
     status_validate = "skipped"
@@ -227,7 +227,7 @@ def _run_script_powershell(res: dict[str, Any], ordinal: int, mode: str) -> tupl
             logs.append({"ts": utcnow_iso(), "level": "error", "message": "Noncompliant but no remediate script provided", "data": {"id": rid}, "run_item_ordinal": ordinal})
         else:
             rem = run_ps(remediate_script, timeout_s=300)
-            status_remediate = "ok" if rem.exit_code == 0 else "failed"
+            status_remediate = "ok" if rem.exit_code == 0 else "fail"
             evidence["remediate"] = {
                 "engine": rem.engine,
                 "exit_code": rem.exit_code,
@@ -243,7 +243,7 @@ def _run_script_powershell(res: dict[str, Any], ordinal: int, mode: str) -> tupl
     # VALIDATE (re-run detect)
     val = run_ps(detect_script, timeout_s=120)
     compliant_after = (val.exit_code == 0)
-    status_validate = "ok" if val.exit_code == 0 else "failed"
+    status_validate = "ok" if val.exit_code == 0 else "fail"
     evidence["validate"] = {
         "engine": val.engine,
         "exit_code": val.exit_code,
@@ -293,6 +293,7 @@ def _run_winget_package(res: dict[str, Any], ordinal: int, mode: str) -> tuple[d
     started_at = utcnow_iso()
 
     detect = list_package(package_id)
+
     installed = installed_from_list_output(detect.stdout, package_id) and detect.exit_code == 0
     installed_ver = parse_version_from_list_output(detect.stdout, package_id)
 
@@ -308,12 +309,50 @@ def _run_winget_package(res: dict[str, Any], ordinal: int, mode: str) -> tuple[d
         }
     }
 
-    status_detect = "ok" if detect.exit_code == 0 else "failed"
+    status_detect = "ok" if detect.exit_code == 0 else "fail"
     status_remediate = "skipped"
     status_validate = "skipped"
     changed = False
     reboot_required = False
     error: dict[str, Any] = {}
+
+    # If winget couldn't even run (common under SYSTEM), stop here but report it.
+    if detect.exit_code != 0 and (detect.stderr or "").strip():
+        err_text = detect.stderr.strip()
+        error = {
+            "type": "winget_unavailable",
+            "message": "winget failed to execute (often happens under SYSTEM/session 0)",
+            "detail": truncate(err_text),
+            "exit_code": detect.exit_code,
+        }
+        ended_at = utcnow_iso()
+        item = {
+            "resource_type": "winget.package",
+            "resource_id": package_id,
+            "name": res.get("name") or package_id,
+            "ordinal": ordinal,
+            "compliant_before": compliant_before,
+            "compliant_after": None,
+            "changed": False,
+            "reboot_required": reboot_required,
+            "status_detect": status_detect,
+            "status_remediate": status_remediate,
+            "status_validate": status_validate,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "evidence": evidence,
+            "error": error,
+        }
+        logs.append(
+            {
+                "ts": utcnow_iso(),
+                "level": "error",
+                "message": "winget.package detect failed",
+                "data": {"id": package_id, "stderr": truncate(err_text), "exit_code": detect.exit_code},
+                "run_item_ordinal": ordinal,
+            }
+        )
+        return item, logs, False
 
     def need_remediate() -> bool:
         if ensure != "present":
@@ -321,13 +360,13 @@ def _run_winget_package(res: dict[str, Any], ordinal: int, mode: str) -> tuple[d
         if not installed:
             return True
         if allow_upgrade and min_version and installed_ver:
-            return str(installed_ver) < str(min_version)  # MVP
+            return str(installed_ver) < str(min_version)  # MVP compare
         return False
 
     success = True
 
     if mode == "audit":
-        logs.append({"ts": utcnow_iso(),"level": "info", "message": "Audit mode; skipping remediation", "data": {"id": package_id}, "run_item_ordinal": ordinal})
+        logs.append({"ts": utcnow_iso(), "level": "info", "message": "Audit mode; skipping remediation", "data": {"id": package_id}, "run_item_ordinal": ordinal})
         status_remediate = "skipped"
     else:
         if need_remediate():
@@ -337,12 +376,14 @@ def _run_winget_package(res: dict[str, Any], ordinal: int, mode: str) -> tuple[d
             else:
                 rem = upgrade_package(package_id)
                 action = "upgrade"
-            status_remediate = "ok" if rem.exit_code == 0 else "failed"
+
+            status_remediate = "ok" if rem.exit_code == 0 else "fail"
             evidence["remediate"] = {"action": action, "exit_code": rem.exit_code, "stdout": truncate(rem.stdout), "stderr": truncate(rem.stderr)}
             changed = rem.exit_code == 0
+
             if rem.exit_code != 0:
                 success = False
-                error = {"type": "winget_failed", "message": f"winget {action} failed", "exit_code": rem.exit_code}
+                error = {"type": "winget_failed", "message": f"winget {action} failed", "exit_code": rem.exit_code, "detail": truncate(rem.stderr)}
         else:
             status_remediate = "skipped"
 
@@ -351,7 +392,7 @@ def _run_winget_package(res: dict[str, Any], ordinal: int, mode: str) -> tuple[d
     ver_after = parse_version_from_list_output(val.stdout, package_id)
 
     compliant_after = installed_after if ensure == "present" else (not installed_after)
-    status_validate = "ok" if val.exit_code == 0 else "failed"
+    status_validate = "ok" if val.exit_code == 0 else "fail"
     evidence["validate"] = {"exit_code": val.exit_code, "stdout": truncate(val.stdout), "stderr": truncate(val.stderr), "installed": installed_after, "version": ver_after}
 
     if ensure == "present" and not installed_after:
@@ -378,5 +419,5 @@ def _run_winget_package(res: dict[str, Any], ordinal: int, mode: str) -> tuple[d
         "error": error,
     }
 
-    logs.append({"ts": utcnow_iso(),"level": "info" if success else "error", "message": "winget.package processed", "data": {"id": package_id, "success": success, "changed": changed}, "run_item_ordinal": ordinal})
+    logs.append({"ts": utcnow_iso(), "level": "info" if success else "error", "message": "winget.package processed", "data": {"id": package_id, "success": success, "changed": changed}, "run_item_ordinal": ordinal})
     return item, logs, success

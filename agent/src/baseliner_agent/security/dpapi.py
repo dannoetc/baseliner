@@ -1,15 +1,14 @@
-"""
-Minimal DPAPI wrapper via ctypes (Windows only).
-
-NOTE: This uses Current User protection by default.
-For a future service, consider switching to LocalMachine scope or running under a fixed service account.
-"""
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
 
+# DPAPI flags
 CRYPTPROTECT_UI_FORBIDDEN = 0x01
+CRYPTPROTECT_LOCAL_MACHINE = 0x04
+
+crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -19,11 +18,21 @@ class DATA_BLOB(ctypes.Structure):
     ]
 
 
-crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+def _raise_last_winerror(msg: str) -> None:
+    err = ctypes.get_last_error()
+    raise OSError(err, f"{msg} (winerror={err})")
 
-CryptProtectData = crypt32.CryptProtectData
-CryptProtectData.argtypes = [
+
+# BOOL CryptProtectData(
+#   DATA_BLOB* pDataIn,
+#   LPCWSTR szDataDescr,
+#   DATA_BLOB* pOptionalEntropy,
+#   PVOID pvReserved,
+#   CRYPTPROTECT_PROMPTSTRUCT* pPromptStruct,
+#   DWORD dwFlags,
+#   DATA_BLOB* pDataOut
+# );
+crypt32.CryptProtectData.argtypes = [
     ctypes.POINTER(DATA_BLOB),
     wintypes.LPCWSTR,
     ctypes.POINTER(DATA_BLOB),
@@ -32,10 +41,18 @@ CryptProtectData.argtypes = [
     wintypes.DWORD,
     ctypes.POINTER(DATA_BLOB),
 ]
-CryptProtectData.restype = wintypes.BOOL
+crypt32.CryptProtectData.restype = wintypes.BOOL
 
-CryptUnprotectData = crypt32.CryptUnprotectData
-CryptUnprotectData.argtypes = [
+# BOOL CryptUnprotectData(
+#   DATA_BLOB* pDataIn,
+#   LPWSTR* ppszDataDescr,
+#   DATA_BLOB* pOptionalEntropy,
+#   PVOID pvReserved,
+#   CRYPTPROTECT_PROMPTSTRUCT* pPromptStruct,
+#   DWORD dwFlags,
+#   DATA_BLOB* pDataOut
+# );
+crypt32.CryptUnprotectData.argtypes = [
     ctypes.POINTER(DATA_BLOB),
     ctypes.POINTER(wintypes.LPWSTR),
     ctypes.POINTER(DATA_BLOB),
@@ -44,31 +61,66 @@ CryptUnprotectData.argtypes = [
     wintypes.DWORD,
     ctypes.POINTER(DATA_BLOB),
 ]
-CryptUnprotectData.restype = wintypes.BOOL
+crypt32.CryptUnprotectData.restype = wintypes.BOOL
 
-LocalFree = kernel32.LocalFree
-LocalFree.argtypes = [ctypes.c_void_p]
-LocalFree.restype = ctypes.c_void_p
-
-
-def _blob_from_bytes(data: bytes) -> DATA_BLOB:
-    buf = (ctypes.c_byte * len(data)).from_buffer_copy(data)
-    return DATA_BLOB(cbData=len(data), pbData=ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+kernel32.LocalFree.restype = ctypes.c_void_p
 
 
-def _bytes_from_blob(blob: DATA_BLOB) -> bytes:
-    if blob.cbData == 0:
-        return b""
-    ptr = ctypes.cast(blob.pbData, ctypes.POINTER(ctypes.c_byte))
-    return bytes(bytearray(ptr[: blob.cbData]))
+def protect_bytes(data: bytes, *, local_machine: bool = True) -> bytes:
+    """
+    Protect bytes using DPAPI.
 
+    local_machine=True => token can be unprotected by any account on the same machine
+                         (good for scheduled tasks as SYSTEM vs CURRENTUSER).
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError("protect_bytes expects bytes")
 
-def dpapi_encrypt(data: bytes) -> bytes:
-    in_blob = _blob_from_bytes(data)
+    flags = CRYPTPROTECT_UI_FORBIDDEN
+    if local_machine:
+        flags |= CRYPTPROTECT_LOCAL_MACHINE
+
+    in_buf = ctypes.create_string_buffer(bytes(data), len(data))
+    in_blob = DATA_BLOB(len(data), ctypes.cast(in_buf, ctypes.POINTER(ctypes.c_byte)))
+
     out_blob = DATA_BLOB()
-    ok = CryptProtectData(
+    ok = crypt32.CryptProtectData(
         ctypes.byref(in_blob),
         None,
+        None,
+        None,
+        None,
+        flags,
+        ctypes.byref(out_blob),
+    )
+    if not ok:
+        _raise_last_winerror("CryptProtectData failed")
+
+    try:
+        protected = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        return protected
+    finally:
+        if out_blob.pbData:
+            kernel32.LocalFree(out_blob.pbData)
+
+
+def unprotect_bytes(data: bytes) -> bytes:
+    """
+    Unprotect bytes using DPAPI.
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError("unprotect_bytes expects bytes")
+
+    in_buf = ctypes.create_string_buffer(bytes(data), len(data))
+    in_blob = DATA_BLOB(len(data), ctypes.cast(in_buf, ctypes.POINTER(ctypes.c_byte)))
+
+    out_blob = DATA_BLOB()
+    desc = wintypes.LPWSTR()
+
+    ok = crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob),
+        ctypes.byref(desc),
         None,
         None,
         None,
@@ -76,31 +128,13 @@ def dpapi_encrypt(data: bytes) -> bytes:
         ctypes.byref(out_blob),
     )
     if not ok:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        return _bytes_from_blob(out_blob)
-    finally:
-        LocalFree(out_blob.pbData)
+        _raise_last_winerror("CryptUnprotectData failed")
 
-
-def dpapi_decrypt(data: bytes) -> bytes:
-    in_blob = _blob_from_bytes(data)
-    out_blob = DATA_BLOB()
-    ppsz_desc = wintypes.LPWSTR()
-    ok = CryptUnprotectData(
-        ctypes.byref(in_blob),
-        ctypes.byref(ppsz_desc),
-        None,
-        None,
-        None,
-        CRYPTPROTECT_UI_FORBIDDEN,
-        ctypes.byref(out_blob),
-    )
-    if not ok:
-        raise ctypes.WinError(ctypes.get_last_error())
     try:
-        return _bytes_from_blob(out_blob)
+        plain = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        return plain
     finally:
-        if ppsz_desc:
-            LocalFree(ppsz_desc)
-        LocalFree(out_blob.pbData)
+        if out_blob.pbData:
+            kernel32.LocalFree(out_blob.pbData)
+        if desc:
+            kernel32.LocalFree(desc)
