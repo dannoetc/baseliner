@@ -36,9 +36,22 @@ router = APIRouter(tags=["admin"])
 
 
 def utcnow() -> datetime:
-    # Return a timezone-naive UTC datetime.
-    # (SQLite + tests are using naive datetimes, so keep it consistent.)
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    # Always return tz-aware UTC datetime.
+    # Postgres returns tz-aware for timezone=True columns; keeping utcnow aware avoids
+    # offset-naive vs offset-aware subtraction errors.
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """
+    Normalize datetimes to tz-aware UTC for calculations.
+    Treat naive datetimes as UTC (common in sqlite/test contexts).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _status(v: Any) -> Optional[str]:
@@ -57,7 +70,8 @@ def create_enroll_token(payload: CreateEnrollTokenRequest, db: Session = Depends
     tok = EnrollToken(
         token_hash=hash_token(raw),
         created_at=utcnow(),
-        expires_at=payload.expires_at,
+        # Keep DB values consistent: store expires_at as UTC-aware when present.
+        expires_at=_as_utc(payload.expires_at),
         used_at=None,
         note=payload.note,
     )
@@ -221,7 +235,7 @@ def list_devices(
     )
 
     rows = db.execute(stmt).all()
-    now = utcnow()
+    now = utcnow()  # aware
 
     items_out: list[DeviceSummary] = []
     for row in rows:
@@ -249,8 +263,11 @@ def list_devices(
                 summary=(m.get("summary") or {}),
             )
 
-        seen_age_s = int((now - d.last_seen_at).total_seconds()) if d.last_seen_at else None
-        run_age_s = int((now - last_run_at).total_seconds()) if last_run_at else None
+        seen_at = _as_utc(d.last_seen_at)
+        run_at = _as_utc(last_run_at)
+
+        seen_age_s = int((now - seen_at).total_seconds()) if seen_at else None
+        run_age_s = int((now - run_at).total_seconds()) if run_at else None
 
         offline = (seen_age_s is None) or (seen_age_s > int(offline_after_seconds))
         stale = (run_age_s is None) or (run_age_s > int(stale_after_seconds))

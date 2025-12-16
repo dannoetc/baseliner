@@ -28,6 +28,9 @@ from .winget import (
     parse_version_from_list_output,
 )
 
+from .engine import PolicyEngine
+from .resources import default_handlers
+
 
 def _device_facts() -> dict[str, Any]:
     return {
@@ -168,76 +171,20 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     )
 
     logs: list[dict[str, Any]] = []
-    items: list[dict[str, Any]] = []
     logs.append({"level": "info", "message": "Run started", "data": {"mode": mode, "resources": len(resources)}})
 
-    ordinal = 0
-    ok = 0
-    failed = 0
+    engine = PolicyEngine(default_handlers())
+    eng = engine.run(resources, mode=mode)
 
-    for res in resources:
-        rtype = (res.get("type") or "").strip()
-        rid = (res.get("id") or "").strip()
-        name = res.get("name")
+    items: list[dict[str, Any]] = eng.items
+    logs.extend(eng.logs)
+    ok = eng.ok
+    failed = eng.failed
 
-        if not rtype or not rid:
-            continue
-
-        try:
-            if rtype == "winget.package":
-                item, item_logs, success = _run_winget_package(res, ordinal, mode)
-            elif rtype == "script.powershell":
-                item, item_logs, success = _run_script_powershell(res, ordinal, mode)
-            else:
-                item = {
-                    "resource_type": rtype,
-                    "resource_id": rid,
-                    "name": name,
-                    "ordinal": ordinal,
-                    "changed": False,
-                    "reboot_required": False,
-                    "status_detect": "skipped",
-                    "status_remediate": "skipped",
-                    "status_validate": "skipped",
-                    "evidence": {},
-                    "error": {"message": "Unsupported resource type (MVP)", "type": "unsupported_resource"},
-                }
-                item_logs = [
-                    {
-                        "level": "warning",
-                        "message": "Unsupported resource type",
-                        "data": {"type": rtype, "id": rid},
-                        "run_item_ordinal": ordinal,
-                    }
-                ]
-                success = False
-        except Exception as e:
-            # Never let a single resource crash the run; record it as failed.
-            item = {
-                "resource_type": rtype,
-                "resource_id": rid,
-                "name": name,
-                "ordinal": ordinal,
-                "changed": False,
-                "reboot_required": False,
-                "status_detect": "fail",
-                "status_remediate": "skipped",
-                "status_validate": "skipped",
-                "evidence": {},
-                "error": {"type": "exception", "message": str(e)},
-            }
-            item_logs = [
-                {
-                    "level": "error",
-                    "message": "Resource exception",
-                    "data": {"type": rtype, "id": rid, "error": str(e)},
-                    "run_item_ordinal": ordinal,
-                }
-            ]
-            success = False
-
-        items.append(item)
-        logs.extend(item_logs)
+    for ir in eng.results:
+        item = ir.item
+        success = ir.success
+        ordinal = int(item.get("ordinal") or 0)
 
         log_event(
             run_log,
@@ -257,13 +204,6 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
                 "compliant_after": item.get("compliant_after"),
             },
         )
-
-        if success:
-            ok += 1
-        else:
-            failed += 1
-
-        ordinal += 1
 
     ended = utcnow_iso()
     status = "succeeded" if failed == 0 else "failed"

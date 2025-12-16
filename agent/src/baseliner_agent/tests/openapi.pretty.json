@@ -1,0 +1,1895 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "Baseliner API",
+        "version": "0.1.0"
+    },
+    "paths": {
+        "/health": {
+            "get": {
+                "summary": "Health",
+                "operationId": "health_health_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/enroll": {
+            "post": {
+                "tags": [
+                    "enroll"
+                ],
+                "summary": "Enroll",
+                "operationId": "enroll_api_v1_enroll_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/EnrollRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EnrollResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/device/policy": {
+            "get": {
+                "tags": [
+                    "device"
+                ],
+                "summary": "Get Effective Policy",
+                "operationId": "get_effective_policy_api_v1_device_policy_get",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EffectivePolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/device/reports": {
+            "post": {
+                "tags": [
+                    "device"
+                ],
+                "summary": "Submit Report",
+                "operationId": "submit_report_api_v1_device_reports_post",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SubmitReportRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SubmitReportResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/admin/enroll-tokens": {
+            "post": {
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Create Enroll Token",
+                "operationId": "create_enroll_token_api_v1_admin_enroll_tokens_post",
+                "parameters": [
+                    {
+                        "name": "x-admin-key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "X-Admin-Key"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CreateEnrollTokenRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/CreateEnrollTokenResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/admin/assign-policy": {
+            "post": {
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Assign Policy",
+                "operationId": "assign_policy_api_v1_admin_assign_policy_post",
+                "parameters": [
+                    {
+                        "name": "x-admin-key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "X-Admin-Key"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AssignPolicyRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AssignPolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/admin/policies": {
+            "post": {
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Upsert Policy",
+                "operationId": "upsert_policy_api_v1_admin_policies_post",
+                "parameters": [
+                    {
+                        "name": "x-admin-key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "X-Admin-Key"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UpsertPolicyRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/UpsertPolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/admin/devices": {
+            "get": {
+                "tags": [
+                    "admin"
+                ],
+                "summary": "List Devices",
+                "operationId": "list_devices_api_v1_admin_devices_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 500,
+                            "minimum": 1,
+                            "default": 50,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "Offset"
+                        }
+                    },
+                    {
+                        "name": "include_health",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "description": "If true, include last_run + computed health fields per device.",
+                            "default": false,
+                            "title": "Include Health"
+                        },
+                        "description": "If true, include last_run + computed health fields per device."
+                    },
+                    {
+                        "name": "stale_after_seconds",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 86400,
+                            "minimum": 60,
+                            "description": "Mark device as 'stale' if latest run is older than this many seconds.",
+                            "default": 1800,
+                            "title": "Stale After Seconds"
+                        },
+                        "description": "Mark device as 'stale' if latest run is older than this many seconds."
+                    },
+                    {
+                        "name": "offline_after_seconds",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 604800,
+                            "minimum": 60,
+                            "description": "Mark device as 'offline' if last_seen_at is older than this many seconds.",
+                            "default": 3600,
+                            "title": "Offline After Seconds"
+                        },
+                        "description": "Mark device as 'offline' if last_seen_at is older than this many seconds."
+                    },
+                    {
+                        "name": "x-admin-key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "X-Admin-Key"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DevicesListResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/admin/runs": {
+            "get": {
+                "tags": [
+                    "admin"
+                ],
+                "summary": "List Runs",
+                "operationId": "list_runs_api_v1_admin_runs_get",
+                "parameters": [
+                    {
+                        "name": "device_id",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Device Id"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 500,
+                            "minimum": 1,
+                            "default": 50,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "Offset"
+                        }
+                    },
+                    {
+                        "name": "x-admin-key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "X-Admin-Key"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RunsListResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/admin/runs/{run_id}": {
+            "get": {
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Get Run Detail",
+                "operationId": "get_run_detail_api_v1_admin_runs__run_id__get",
+                "parameters": [
+                    {
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Run Id"
+                        }
+                    },
+                    {
+                        "name": "x-admin-key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "X-Admin-Key"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RunDetailResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "AssignPolicyRequest": {
+                "properties": {
+                    "device_id": {
+                        "type": "string",
+                        "title": "Device Id"
+                    },
+                    "policy_name": {
+                        "type": "string",
+                        "title": "Policy Name"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "title": "Mode",
+                        "default": "enforce"
+                    },
+                    "priority": {
+                        "type": "integer",
+                        "title": "Priority",
+                        "default": 100
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "device_id",
+                    "policy_name"
+                ],
+                "title": "AssignPolicyRequest"
+            },
+            "AssignPolicyResponse": {
+                "properties": {
+                    "ok": {
+                        "type": "boolean",
+                        "title": "Ok"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "ok"
+                ],
+                "title": "AssignPolicyResponse"
+            },
+            "CreateEnrollTokenRequest": {
+                "properties": {
+                    "expires_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Expires At"
+                    },
+                    "note": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Note"
+                    }
+                },
+                "type": "object",
+                "title": "CreateEnrollTokenRequest"
+            },
+            "CreateEnrollTokenResponse": {
+                "properties": {
+                    "enroll_token": {
+                        "type": "string",
+                        "title": "Enroll Token"
+                    },
+                    "expires_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Expires At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "enroll_token"
+                ],
+                "title": "CreateEnrollTokenResponse"
+            },
+            "DeviceHealth": {
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "title": "Status"
+                    },
+                    "now": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Now"
+                    },
+                    "last_seen_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Last Seen At"
+                    },
+                    "last_run_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Last Run At"
+                    },
+                    "last_run_status": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Last Run Status"
+                    },
+                    "seen_age_seconds": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Seen Age Seconds"
+                    },
+                    "run_age_seconds": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Run Age Seconds"
+                    },
+                    "stale": {
+                        "type": "boolean",
+                        "title": "Stale",
+                        "default": false
+                    },
+                    "offline": {
+                        "type": "boolean",
+                        "title": "Offline",
+                        "default": false
+                    },
+                    "reason": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Reason"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "status",
+                    "now"
+                ],
+                "title": "DeviceHealth"
+            },
+            "DeviceSummary": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "title": "Id"
+                    },
+                    "device_key": {
+                        "type": "string",
+                        "title": "Device Key"
+                    },
+                    "hostname": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Hostname"
+                    },
+                    "os": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Os"
+                    },
+                    "os_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Os Version"
+                    },
+                    "arch": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Arch"
+                    },
+                    "agent_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Agent Version"
+                    },
+                    "enrolled_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Enrolled At"
+                    },
+                    "last_seen_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Last Seen At"
+                    },
+                    "tags": {
+                        "type": "object",
+                        "title": "Tags"
+                    },
+                    "last_run": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/RunSummaryLite"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
+                    },
+                    "health": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/DeviceHealth"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "device_key"
+                ],
+                "title": "DeviceSummary"
+            },
+            "DevicesListResponse": {
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/DeviceSummary"
+                        },
+                        "type": "array",
+                        "title": "Items"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "title": "Limit"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "title": "Offset"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "items",
+                    "limit",
+                    "offset"
+                ],
+                "title": "DevicesListResponse"
+            },
+            "EffectivePolicyResponse": {
+                "properties": {
+                    "policy_id": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Policy Id"
+                    },
+                    "policy_name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Policy Name"
+                    },
+                    "schema_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Schema Version"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "title": "Mode",
+                        "default": "enforce"
+                    },
+                    "document": {
+                        "type": "object",
+                        "title": "Document",
+                        "default": {}
+                    },
+                    "effective_policy_hash": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Effective Policy Hash"
+                    },
+                    "sources": {
+                        "items": {
+                            "type": "object"
+                        },
+                        "type": "array",
+                        "title": "Sources",
+                        "default": []
+                    }
+                },
+                "type": "object",
+                "title": "EffectivePolicyResponse"
+            },
+            "EnrollRequest": {
+                "properties": {
+                    "enroll_token": {
+                        "type": "string",
+                        "minLength": 10,
+                        "title": "Enroll Token"
+                    },
+                    "device_key": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "minLength": 8,
+                        "title": "Device Key"
+                    },
+                    "hostname": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Hostname"
+                    },
+                    "os": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Os",
+                        "default": "windows"
+                    },
+                    "os_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Os Version"
+                    },
+                    "arch": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Arch"
+                    },
+                    "agent_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Agent Version"
+                    },
+                    "tags": {
+                        "type": "object",
+                        "title": "Tags"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "enroll_token",
+                    "device_key"
+                ],
+                "title": "EnrollRequest"
+            },
+            "EnrollResponse": {
+                "properties": {
+                    "device_id": {
+                        "type": "string",
+                        "title": "Device Id"
+                    },
+                    "device_token": {
+                        "type": "string",
+                        "title": "Device Token"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "device_id",
+                    "device_token"
+                ],
+                "title": "EnrollResponse"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "LogEventDetail": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "title": "Id"
+                    },
+                    "ts": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Ts"
+                    },
+                    "level": {
+                        "type": "string",
+                        "title": "Level"
+                    },
+                    "message": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "data": {
+                        "type": "object",
+                        "title": "Data",
+                        "default": {}
+                    },
+                    "run_item_id": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Run Item Id"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "ts",
+                    "level",
+                    "message"
+                ],
+                "title": "LogEventDetail"
+            },
+            "ReportLogEvent": {
+                "properties": {
+                    "ts": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ts"
+                    },
+                    "level": {
+                        "type": "string",
+                        "title": "Level",
+                        "default": "info"
+                    },
+                    "message": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "data": {
+                        "type": "object",
+                        "title": "Data"
+                    },
+                    "run_item_ordinal": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Run Item Ordinal"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "message"
+                ],
+                "title": "ReportLogEvent"
+            },
+            "ReportRunItem": {
+                "properties": {
+                    "resource_type": {
+                        "type": "string",
+                        "title": "Resource Type"
+                    },
+                    "resource_id": {
+                        "type": "string",
+                        "title": "Resource Id"
+                    },
+                    "name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Name"
+                    },
+                    "ordinal": {
+                        "type": "integer",
+                        "title": "Ordinal",
+                        "default": 0
+                    },
+                    "compliant_before": {
+                        "anyOf": [
+                            {
+                                "type": "boolean"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Compliant Before"
+                    },
+                    "compliant_after": {
+                        "anyOf": [
+                            {
+                                "type": "boolean"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Compliant After"
+                    },
+                    "changed": {
+                        "type": "boolean",
+                        "title": "Changed",
+                        "default": false
+                    },
+                    "reboot_required": {
+                        "type": "boolean",
+                        "title": "Reboot Required",
+                        "default": false
+                    },
+                    "status_detect": {
+                        "type": "string",
+                        "title": "Status Detect",
+                        "default": "not_run"
+                    },
+                    "status_remediate": {
+                        "type": "string",
+                        "title": "Status Remediate",
+                        "default": "not_run"
+                    },
+                    "status_validate": {
+                        "type": "string",
+                        "title": "Status Validate",
+                        "default": "not_run"
+                    },
+                    "started_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    },
+                    "evidence": {
+                        "type": "object",
+                        "title": "Evidence"
+                    },
+                    "error": {
+                        "type": "object",
+                        "title": "Error"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "resource_type",
+                    "resource_id"
+                ],
+                "title": "ReportRunItem"
+            },
+            "RunDetailResponse": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "title": "Id"
+                    },
+                    "device_id": {
+                        "type": "string",
+                        "title": "Device Id"
+                    },
+                    "started_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    },
+                    "status": {
+                        "type": "string",
+                        "title": "Status"
+                    },
+                    "agent_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Agent Version"
+                    },
+                    "summary": {
+                        "type": "object",
+                        "title": "Summary",
+                        "default": {}
+                    },
+                    "policy_snapshot": {
+                        "type": "object",
+                        "title": "Policy Snapshot",
+                        "default": {}
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/RunItemDetail"
+                        },
+                        "type": "array",
+                        "title": "Items",
+                        "default": []
+                    },
+                    "logs": {
+                        "items": {
+                            "$ref": "#/components/schemas/LogEventDetail"
+                        },
+                        "type": "array",
+                        "title": "Logs",
+                        "default": []
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "device_id",
+                    "started_at",
+                    "status"
+                ],
+                "title": "RunDetailResponse"
+            },
+            "RunItemDetail": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "title": "Id"
+                    },
+                    "ordinal": {
+                        "type": "integer",
+                        "title": "Ordinal"
+                    },
+                    "resource_type": {
+                        "type": "string",
+                        "title": "Resource Type"
+                    },
+                    "resource_id": {
+                        "type": "string",
+                        "title": "Resource Id"
+                    },
+                    "name": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Name"
+                    },
+                    "compliant_before": {
+                        "anyOf": [
+                            {
+                                "type": "boolean"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Compliant Before"
+                    },
+                    "compliant_after": {
+                        "anyOf": [
+                            {
+                                "type": "boolean"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Compliant After"
+                    },
+                    "changed": {
+                        "type": "boolean",
+                        "title": "Changed"
+                    },
+                    "reboot_required": {
+                        "type": "boolean",
+                        "title": "Reboot Required"
+                    },
+                    "status_detect": {
+                        "type": "string",
+                        "title": "Status Detect"
+                    },
+                    "status_remediate": {
+                        "type": "string",
+                        "title": "Status Remediate"
+                    },
+                    "status_validate": {
+                        "type": "string",
+                        "title": "Status Validate"
+                    },
+                    "started_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    },
+                    "evidence": {
+                        "type": "object",
+                        "title": "Evidence",
+                        "default": {}
+                    },
+                    "error": {
+                        "type": "object",
+                        "title": "Error",
+                        "default": {}
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "ordinal",
+                    "resource_type",
+                    "resource_id",
+                    "changed",
+                    "reboot_required",
+                    "status_detect",
+                    "status_remediate",
+                    "status_validate"
+                ],
+                "title": "RunItemDetail"
+            },
+            "RunSummary": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "title": "Id"
+                    },
+                    "device_id": {
+                        "type": "string",
+                        "title": "Device Id"
+                    },
+                    "started_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    },
+                    "status": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Status"
+                    },
+                    "agent_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Agent Version"
+                    },
+                    "summary": {
+                        "type": "object",
+                        "title": "Summary"
+                    },
+                    "policy_snapshot": {
+                        "type": "object",
+                        "title": "Policy Snapshot"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "device_id"
+                ],
+                "title": "RunSummary"
+            },
+            "RunSummaryLite": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "title": "Id"
+                    },
+                    "started_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    },
+                    "status": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Status"
+                    },
+                    "agent_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Agent Version"
+                    },
+                    "effective_policy_hash": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Effective Policy Hash"
+                    },
+                    "summary": {
+                        "type": "object",
+                        "title": "Summary"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id"
+                ],
+                "title": "RunSummaryLite"
+            },
+            "RunsListResponse": {
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/RunSummary"
+                        },
+                        "type": "array",
+                        "title": "Items"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "title": "Limit"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "title": "Offset"
+                    },
+                    "total": {
+                        "type": "integer",
+                        "title": "Total"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "items",
+                    "limit",
+                    "offset",
+                    "total"
+                ],
+                "title": "RunsListResponse"
+            },
+            "SubmitReportRequest": {
+                "properties": {
+                    "started_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    },
+                    "status": {
+                        "type": "string",
+                        "title": "Status",
+                        "default": "running"
+                    },
+                    "agent_version": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Agent Version"
+                    },
+                    "effective_policy_hash": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Effective Policy Hash"
+                    },
+                    "policy_snapshot": {
+                        "type": "object",
+                        "title": "Policy Snapshot"
+                    },
+                    "summary": {
+                        "type": "object",
+                        "title": "Summary"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/ReportRunItem"
+                        },
+                        "type": "array",
+                        "title": "Items"
+                    },
+                    "logs": {
+                        "items": {
+                            "$ref": "#/components/schemas/ReportLogEvent"
+                        },
+                        "type": "array",
+                        "title": "Logs"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "started_at"
+                ],
+                "title": "SubmitReportRequest"
+            },
+            "SubmitReportResponse": {
+                "properties": {
+                    "run_id": {
+                        "type": "string",
+                        "title": "Run Id"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "run_id"
+                ],
+                "title": "SubmitReportResponse"
+            },
+            "UpsertPolicyRequest": {
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "minLength": 3,
+                        "title": "Name"
+                    },
+                    "description": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Description"
+                    },
+                    "schema_version": {
+                        "type": "string",
+                        "title": "Schema Version",
+                        "default": "1.0"
+                    },
+                    "document": {
+                        "type": "object",
+                        "title": "Document"
+                    },
+                    "is_active": {
+                        "type": "boolean",
+                        "title": "Is Active",
+                        "default": true
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "name",
+                    "document"
+                ],
+                "title": "UpsertPolicyRequest"
+            },
+            "UpsertPolicyResponse": {
+                "properties": {
+                    "policy_id": {
+                        "type": "string",
+                        "title": "Policy Id"
+                    },
+                    "name": {
+                        "type": "string",
+                        "title": "Name"
+                    },
+                    "is_active": {
+                        "type": "boolean",
+                        "title": "Is Active"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "policy_id",
+                    "name",
+                    "is_active"
+                ],
+                "title": "UpsertPolicyResponse"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        }
+    }
+}

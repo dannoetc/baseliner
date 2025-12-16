@@ -340,12 +340,12 @@ def _maybe_fix_msstore_geo_and_retry(result: WingetResult, retry_args: list[str]
     return result
 
 
-def list_package(package_id: str, *, source: str = "winget") -> WingetResult:
+def list_package(package_id: str, *, source: str | None = "winget") -> WingetResult:
     """
     Detect installed packages.
 
     Default behavior pins to source=winget and scope=machine (quiet + matches our install).
-    If you need msstore detection, call with source="msstore" (will auto-fix geo if needed).
+    If source is None, omit --source (use winget default).
     """
     args = [
         "winget",
@@ -369,11 +369,8 @@ def list_package(package_id: str, *, source: str = "winget") -> WingetResult:
     return r
 
 
+
 def show_package(package_id: str, *, source: Optional[str] = "winget") -> WingetResult:
-    """
-    Preflight helper: confirm the package ID exists in the catalog.
-    By default we pin to source=winget (quiet). For store apps, try source="msstore".
-    """
     args = [
         "winget",
         "show",
@@ -392,11 +389,6 @@ def show_package(package_id: str, *, source: Optional[str] = "winget") -> Winget
 
 
 def package_id_exists_ex(package_id: str) -> tuple[bool, Optional[str], WingetResult]:
-    """
-    Returns (exists, source, result).
-
-    We try winget first, then msstore. This makes preflight useful for both repository and store IDs.
-    """
     last: WingetResult | None = None
 
     for src in _PREFLIGHT_SOURCES:
@@ -404,33 +396,31 @@ def package_id_exists_ex(package_id: str) -> tuple[bool, Optional[str], WingetRe
         last = r
         combined = f"{r.stdout}\n{r.stderr}".strip()
 
-        # Hard "no match"
         if _WINGET_SHOW_NO_MATCH_RE.search(combined):
             continue
 
-        # Success
         if r.exit_code == 0:
             return (True, src, r)
 
-        # Non-zero unknown error: stop here (winget itself broke / offline / etc.)
         return (False, src, r)
 
-    # If both sources said "no match", return the last attempt (usually msstore) for evidence.
     if last is None:
         last = WingetResult(exit_code=1, stdout="", stderr="preflight not executed")
     return (False, None, last)
 
 
 def package_id_exists(package_id: str) -> tuple[bool, WingetResult]:
-    """
-    Backwards compatible wrapper for existing callers.
-    Returns (exists, result) using the multi-source preflight.
-    """
     exists, _src, r = package_id_exists_ex(package_id)
     return (exists, r)
 
 
-def install_package(package_id: str) -> WingetResult:
+def install_package(
+    package_id: str,
+    *,
+    source: str | None = None,
+    version: str | None = None,
+    force: bool = False,
+) -> WingetResult:
     args = [
         "winget",
         "install",
@@ -444,11 +434,18 @@ def install_package(package_id: str) -> WingetResult:
         "--accept-package-agreements",
         "--accept-source-agreements",
     ]
+    if version:
+        args.extend(["--version", version])
+    if force:
+        args.append("--force")
+    if source:
+        args.extend(["--source", source])
     res = _run(args)
     return _maybe_fix_msstore_geo_and_retry(res, args)
 
 
-def upgrade_package(package_id: str) -> WingetResult:
+
+def upgrade_package(package_id: str, *, source: str | None = None) -> WingetResult:
     args = [
         "winget",
         "upgrade",
@@ -462,6 +459,27 @@ def upgrade_package(package_id: str) -> WingetResult:
         "--accept-package-agreements",
         "--accept-source-agreements",
     ]
+    if source:
+        args.extend(["--source", source])
+    res = _run(args)
+    return _maybe_fix_msstore_geo_and_retry(res, args)
+
+
+def uninstall_package(package_id: str, *, source: str | None = None) -> WingetResult:
+    args = [
+        "winget",
+        "uninstall",
+        "--id",
+        package_id,
+        "--exact",
+        "--silent",
+        "--disable-interactivity",
+        "--scope",
+        "machine",
+        "--accept-source-agreements",
+    ]
+    if source:
+        args.extend(["--source", source])
     res = _run(args)
     return _maybe_fix_msstore_geo_and_retry(res, args)
 

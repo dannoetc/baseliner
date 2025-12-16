@@ -1,0 +1,178 @@
+{
+  "id": "a56a9927-c31a-4eb3-a698-c43939738e65",
+  "device_id": "7a912a9e-acda-4100-b755-2a77fe523e33",
+  "started_at": "2025-12-16T01:16:11.158234Z",
+  "ended_at": "2025-12-16T01:16:20.962347Z",
+  "status": "failed",
+  "agent_version": "0.1.0-dev",
+  "summary": {
+    "ok": 1,
+    "failed": 2,
+    "itemsTotal": 3,
+    "observed_state_hash": "59408b6dfdee46fdd3fa9c6fa5702a5914a55f34761e0521556a7742d39580d3"
+  },
+  "policy_snapshot": {
+    "policy_id": "4d644430-d910-450c-8aa1-74395a1edb8c",
+    "policy_name": "smoke-putty-7zip",
+    "effective_policy_hash": "b1b5b9a754f8b70a7b5f0d5e40f4ff0c6642bcc8434fb82b540c0a1b0c5788a2"
+  },
+  "items": [
+    {
+      "id": "a5f44ffd-0b4d-4f7d-bab5-a807d844e328",
+      "ordinal": 0,
+      "resource_type": "winget.package",
+      "resource_id": "putty",
+      "name": "PuTTY",
+      "compliant_before": true,
+      "compliant_after": true,
+      "changed": false,
+      "reboot_required": false,
+      "status_detect": "ok",
+      "status_remediate": "skipped",
+      "status_validate": "ok",
+      "started_at": "2025-12-16T01:16:13.299937Z",
+      "ended_at": "2025-12-16T01:16:16.709874Z",
+      "evidence": {
+        "detect": {
+          "stderr": "",
+          "stdout": "No installed package found matching input criteria.",
+          "version": null,
+          "exit_code": 0,
+          "installed": false
+        },
+        "validate": {
+          "stderr": "",
+          "stdout": "No installed package found matching input criteria.",
+          "version": null,
+          "exit_code": 0,
+          "installed": false
+        }
+      },
+      "error": {}
+    },
+    {
+      "id": "0bad3d4c-d3f8-403b-ba3a-ed049ba7cf6e",
+      "ordinal": 1,
+      "resource_type": "winget.package",
+      "resource_id": "7zip",
+      "name": "7-Zip",
+      "compliant_before": false,
+      "compliant_after": false,
+      "changed": false,
+      "reboot_required": false,
+      "status_detect": "ok",
+      "status_remediate": "fail",
+      "status_validate": "ok",
+      "started_at": "2025-12-16T01:16:16.709874Z",
+      "ended_at": "2025-12-16T01:16:20.962347Z",
+      "evidence": {
+        "detect": {
+          "stderr": "",
+          "stdout": "No installed package found matching input criteria.",
+          "version": null,
+          "exit_code": 0,
+          "installed": false
+        },
+        "validate": {
+          "stderr": "",
+          "stdout": "No installed package found matching input criteria.",
+          "version": null,
+          "exit_code": 0,
+          "installed": false
+        },
+        "remediate": {
+          "action": "install",
+          "stderr": "",
+          "stdout": "No package found matching input criteria.",
+          "exit_code": 2316632084
+        }
+      },
+      "error": {
+        "type": "winget_failed",
+        "detail": "",
+        "message": "winget install failed",
+        "exit_code": 2316632084
+      }
+    },
+    {
+      "id": "11e24e05-07ce-463e-afac-f71ede6a220d",
+      "ordinal": 2,
+      "resource_type": "script.powershell",
+      "resource_id": "marker",
+      "name": "Write Baseliner marker (phase B)",
+      "compliant_before": null,
+      "compliant_after": null,
+      "changed": false,
+      "reboot_required": false,
+      "status_detect": "fail",
+      "status_remediate": "skipped",
+      "status_validate": "skipped",
+      "started_at": "2025-12-16T01:16:20.962347Z",
+      "ended_at": "2025-12-16T01:16:20.962347Z",
+      "evidence": {},
+      "error": {
+        "type": "invalid_resource",
+        "message": "script.powershell missing detect"
+      }
+    }
+  ],
+  "logs": [
+    {
+      "id": "6218d17e-eef9-448a-ab41-3f46afb677f5",
+      "ts": "2025-12-16T01:16:16.709874Z",
+      "level": "info",
+      "message": "winget.package processed",
+      "data": {
+        "id": "putty",
+        "changed": false,
+        "success": true
+      },
+      "run_item_id": "a5f44ffd-0b4d-4f7d-bab5-a807d844e328"
+    },
+    {
+      "id": "01a02b40-0672-42c3-8631-dc43477695f1",
+      "ts": "2025-12-16T01:16:20.962347Z",
+      "level": "error",
+      "message": "winget.package processed",
+      "data": {
+        "id": "7zip",
+        "changed": false,
+        "success": false
+      },
+      "run_item_id": "0bad3d4c-d3f8-403b-ba3a-ed049ba7cf6e"
+    },
+    {
+      "id": "47b39e3d-15c9-47a4-b420-c664d6e5d315",
+      "ts": "2025-12-16T01:16:20.962347Z",
+      "level": "error",
+      "message": "script.powershell missing detect",
+      "data": {
+        "id": "marker"
+      },
+      "run_item_id": "11e24e05-07ce-463e-afac-f71ede6a220d"
+    },
+    {
+      "id": "9f118851-7925-47d4-9634-0e6cce268aa7",
+      "ts": "2025-12-16T01:16:20.962347Z",
+      "level": "info",
+      "message": "Run finished",
+      "data": {
+        "ok": 1,
+        "failed": 2,
+        "status": "failed"
+      },
+      "run_item_id": null
+    },
+    {
+      "id": "5bef3afe-9e60-4563-ad52-f2bc4c2016fc",
+      "ts": "2025-12-16T01:16:23.255304Z",
+      "level": "info",
+      "message": "Run started",
+      "data": {
+        "mode": "enforce",
+        "resources": 3
+      },
+      "run_item_id": null
+    }
+  ]
+}

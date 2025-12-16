@@ -1,0 +1,41 @@
+{
+  "id": "7a912a9e-acda-4100-b755-2a77fe523e33",
+  "device_key": "DESKTOP-FTVVO4A",
+  "hostname": "DESKTOP-FTVVO4A",
+  "os": "windows",
+  "os_version": "10.0.26200",
+  "arch": "AMD64",
+  "agent_version": "0.1.0-dev",
+  "enrolled_at": "2025-12-14T01:44:31.317284Z",
+  "last_seen_at": "2025-12-16T01:27:14.653519Z",
+  "tags": {
+    "env": "dev",
+    "site": "denver"
+  },
+  "last_run": {
+    "id": "94d8bfb9-594b-4f49-a79d-2c6492fbc92a",
+    "started_at": "2025-12-16T01:26:50.916492Z",
+    "ended_at": "2025-12-16T01:27:12.374325Z",
+    "status": "succeeded",
+    "agent_version": "0.1.0-dev",
+    "effective_policy_hash": "b1b5b9a754f8b70a7b5f0d5e40f4ff0c6642bcc8434fb82b540c0a1b0c5788a2",
+    "summary": {
+      "ok": 3,
+      "failed": 0,
+      "itemsTotal": 3,
+      "observed_state_hash": "83f4849db8eb2f8b9f6faf5936524e619320f0c82acaadc54927a1dcf58e33d2"
+    }
+  },
+  "health": {
+    "status": "ok",
+    "now": "2025-12-16T01:30:17.23469Z",
+    "last_seen_at": "2025-12-16T01:27:14.653519Z",
+    "last_run_at": "2025-12-16T01:27:12.374325Z",
+    "last_run_status": "succeeded",
+    "seen_age_seconds": 182,
+    "run_age_seconds": 184,
+    "stale": false,
+    "offline": false,
+    "reason": null
+  }
+}

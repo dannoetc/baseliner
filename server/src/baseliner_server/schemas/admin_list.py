@@ -1,80 +1,88 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ORMModel(BaseModel):
-    """Base schema with SQLAlchemy ORM support (pydantic v2)."""
+class RunSummaryLite(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
-    model_config = ConfigDict(from_attributes=True, extra="ignore")
-
-
-class RunSummaryLite(ORMModel):
     id: str
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
-    status: str | None = None
-    agent_version: str | None = None
-    effective_policy_hash: str | None = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    status: Optional[str] = None
+    agent_version: Optional[str] = None
+    effective_policy_hash: Optional[str] = None
     summary: dict[str, Any] = Field(default_factory=dict)
 
 
-class DeviceHealth(ORMModel):
-    status: str  # "ok" | "warn" | "offline"
-    now: datetime
-    last_seen_at: datetime | None = None
-    last_run_at: datetime | None = None
-    last_run_status: str | None = None
+class DeviceHealth(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
-    seen_age_seconds: int | None = None
-    run_age_seconds: int | None = None
+    status: str
+    now: datetime
+
+    last_seen_at: Optional[datetime] = None
+    last_run_at: Optional[datetime] = None
+    last_run_status: Optional[str] = None
+
+    seen_age_seconds: Optional[int] = None
+    run_age_seconds: Optional[int] = None
 
     stale: bool = False
     offline: bool = False
-    reason: str | None = None
+    reason: Optional[str] = None
 
 
-class DeviceSummary(ORMModel):
+class DeviceSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     device_key: str
-    hostname: str | None = None
-    os: str | None = None
-    os_version: str | None = None
-    arch: str | None = None
 
-    agent_version: str | None = None
-    enrolled_at: datetime | None = None
+    hostname: Optional[str] = None
+    os: Optional[str] = None
+    os_version: Optional[str] = None
+    arch: Optional[str] = None
+    agent_version: Optional[str] = None
+
+    enrolled_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
 
     tags: dict[str, Any] = Field(default_factory=dict)
-    last_seen_at: datetime | None = None
 
-    last_run: RunSummaryLite | None = None
-    health: DeviceHealth | None = None
+    # If these fields aren't declared, FastAPI will DROP them from the response_model.
+    last_run: Optional[RunSummaryLite] = None
+    health: Optional[DeviceHealth] = None
 
 
+class DevicesListResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
-class DevicesListResponse(ORMModel):
     items: list[DeviceSummary]
     limit: int
     offset: int
 
 
-class RunSummary(ORMModel):
+class RunSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
-    device_id: str | None = None
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
-    status: str | None = None
-    agent_version: str | None = None
+    device_id: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    status: Optional[str] = None
+    agent_version: Optional[str] = None
     summary: dict[str, Any] = Field(default_factory=dict)
     policy_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
-class RunsListResponse(ORMModel):
+class RunsListResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     items: list[RunSummary]
     limit: int
     offset: int
-    total: int = 0
+    total: int

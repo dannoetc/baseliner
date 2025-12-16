@@ -1,0 +1,189 @@
+{
+  "id": "94d8bfb9-594b-4f49-a79d-2c6492fbc92a",
+  "device_id": "7a912a9e-acda-4100-b755-2a77fe523e33",
+  "started_at": "2025-12-16T01:26:50.916492Z",
+  "ended_at": "2025-12-16T01:27:12.374325Z",
+  "status": "succeeded",
+  "agent_version": "0.1.0-dev",
+  "summary": {
+    "ok": 3,
+    "failed": 0,
+    "itemsTotal": 3,
+    "observed_state_hash": "83f4849db8eb2f8b9f6faf5936524e619320f0c82acaadc54927a1dcf58e33d2"
+  },
+  "policy_snapshot": {
+    "policy_id": "4d644430-d910-450c-8aa1-74395a1edb8c",
+    "policy_name": "smoke-putty-7zip",
+    "effective_policy_hash": "b1b5b9a754f8b70a7b5f0d5e40f4ff0c6642bcc8434fb82b540c0a1b0c5788a2"
+  },
+  "items": [
+    {
+      "id": "ee7c81f1-be36-46df-b08e-5fab08455447",
+      "ordinal": 0,
+      "resource_type": "winget.package",
+      "resource_id": "putty",
+      "name": "PuTTY",
+      "compliant_before": true,
+      "compliant_after": true,
+      "changed": false,
+      "reboot_required": false,
+      "status_detect": "ok",
+      "status_remediate": "skipped",
+      "status_validate": "ok",
+      "started_at": "2025-12-16T01:26:53.053326Z",
+      "ended_at": "2025-12-16T01:26:56.711306Z",
+      "evidence": {
+        "detect": {
+          "stderr": "",
+          "stdout": "No installed package found matching input criteria.",
+          "version": null,
+          "exit_code": 0,
+          "installed": false,
+          "requested_package_id": "PuTTY.PuTTY"
+        },
+        "validate": {
+          "stderr": "",
+          "stdout": "No installed package found matching input criteria.",
+          "version": null,
+          "exit_code": 0,
+          "installed": false,
+          "requested_package_id": "PuTTY.PuTTY"
+        }
+      },
+      "error": {}
+    },
+    {
+      "id": "39f15e41-4385-4971-9fc2-1b376bad67a6",
+      "ordinal": 1,
+      "resource_type": "winget.package",
+      "resource_id": "7zip",
+      "name": "7-Zip",
+      "compliant_before": true,
+      "compliant_after": true,
+      "changed": false,
+      "reboot_required": false,
+      "status_detect": "ok",
+      "status_remediate": "skipped",
+      "status_validate": "ok",
+      "started_at": "2025-12-16T01:26:56.711306Z",
+      "ended_at": "2025-12-16T01:26:59.798188Z",
+      "evidence": {
+        "detect": {
+          "stderr": "",
+          "stdout": "Name              Id        Version\n-----------------------------------\n7-Zip 25.01 (x64) 7zip.7zip 25.01",
+          "version": "25.01",
+          "exit_code": 0,
+          "installed": true,
+          "requested_package_id": "7zip.7zip"
+        },
+        "validate": {
+          "stderr": "",
+          "stdout": "Name              Id        Version\n-----------------------------------\n7-Zip 25.01 (x64) 7zip.7zip 25.01",
+          "version": "25.01",
+          "exit_code": 0,
+          "installed": true,
+          "requested_package_id": "7zip.7zip"
+        }
+      },
+      "error": {}
+    },
+    {
+      "id": "c893f0d4-0e20-4257-9c8c-3a469605a9fa",
+      "ordinal": 2,
+      "resource_type": "script.powershell",
+      "resource_id": "marker",
+      "name": "Write Baseliner marker (phase B)",
+      "compliant_before": true,
+      "compliant_after": true,
+      "changed": false,
+      "reboot_required": false,
+      "status_detect": "ok",
+      "status_remediate": "skipped",
+      "status_validate": "ok",
+      "started_at": "2025-12-16T01:26:59.798188Z",
+      "ended_at": "2025-12-16T01:27:12.374325Z",
+      "evidence": {
+        "meta": {
+          "detect_source": "script",
+          "remediate_source": null
+        },
+        "detect": {
+          "engine": "pwsh",
+          "stderr": "#< CLIXML\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><S S=\"Error\">_x001B_[31;1m=: _x001B_[31;1mThe term '=' is not recognized as a name of a cmdlet, function, script file, or executable program._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[31;1mCheck the spelling of the name, or if a path was included, verify that the path is correct and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m=: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   2 | _x001B_[0m  _x001B_[36;1m=_x001B_[0m Join-Path  'marker.txt'_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m  ~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mThe term '=' is not recognized as a name of a cmdlet, function, script file, or executable program._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m_x001B_[31;1mCheck the spelling of the name, or if a path was included, verify that the path is correct and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1mNew-Item: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   3 | _x001B_[0m New-Item _x001B_[36;1m-Path_x001B_[0m  -ItemType Directory -Force | Out-Null_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m          ~~~~~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mMissing an argument for parameter 'Path'. Specify a parameter of type 'System.String[]' and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m=: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   4 | _x001B_[0m  _x001B_[36;1m=_x001B_[0m (Get-Date).ToUniversalTime().ToString('o')_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m  ~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mThe term '=' is not recognized as a name of a cmdlet, function, script file, or executable program._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m_x001B_[31;1mCheck the spelling of the name, or if a path was included, verify that the path is correct and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1mSet-Content: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   5 | _x001B_[0m Set-Content _x001B_[36;1m-Path_x001B_[0m  -Value \"baseliner marker_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m             ~~~~~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mMissing an argument for parameter 'Path'. Specify a parameter of type 'System.String[]' and try again._x001B_[0m_x000D__x000A_</S></Objs>",
+          "stdout": "wrote \n",
+          "exit_code": 0
+        },
+        "validate": {
+          "engine": "pwsh",
+          "stderr": "#< CLIXML\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><S S=\"Error\">_x001B_[31;1m=: _x001B_[31;1mThe term '=' is not recognized as a name of a cmdlet, function, script file, or executable program._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[31;1mCheck the spelling of the name, or if a path was included, verify that the path is correct and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m=: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   2 | _x001B_[0m  _x001B_[36;1m=_x001B_[0m Join-Path  'marker.txt'_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m  ~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mThe term '=' is not recognized as a name of a cmdlet, function, script file, or executable program._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m_x001B_[31;1mCheck the spelling of the name, or if a path was included, verify that the path is correct and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1mNew-Item: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   3 | _x001B_[0m New-Item _x001B_[36;1m-Path_x001B_[0m  -ItemType Directory -Force | Out-Null_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m          ~~~~~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mMissing an argument for parameter 'Path'. Specify a parameter of type 'System.String[]' and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m=: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   4 | _x001B_[0m  _x001B_[36;1m=_x001B_[0m (Get-Date).ToUniversalTime().ToString('o')_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m  ~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mThe term '=' is not recognized as a name of a cmdlet, function, script file, or executable program._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m_x001B_[31;1mCheck the spelling of the name, or if a path was included, verify that the path is correct and try again._x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1mSet-Content: _x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1mLine |_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m   5 | _x001B_[0m Set-Content _x001B_[36;1m-Path_x001B_[0m  -Value \"baseliner marker_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m     | _x001B_[31;1m             ~~~~~_x001B_[0m_x000D__x000A_</S><S S=\"Error\">_x001B_[31;1m_x001B_[36;1m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[0m_x001B_[36;1m_x001B_[31;1m_x001B_[31;1m_x001B_[36;1m     | _x001B_[31;1mMissing an argument for parameter 'Path'. Specify a parameter of type 'System.String[]' and try again._x001B_[0m_x000D__x000A_</S></Objs>",
+          "stdout": "wrote \n",
+          "exit_code": 0
+        }
+      },
+      "error": {}
+    }
+  ],
+  "logs": [
+    {
+      "id": "54416fbc-5c85-435b-9c61-a0538c1aa7bb",
+      "ts": "2025-12-16T01:26:56.711306Z",
+      "level": "info",
+      "message": "winget.package processed",
+      "data": {
+        "id": "putty",
+        "changed": false,
+        "success": true,
+        "package_id": "PuTTY.PuTTY"
+      },
+      "run_item_id": "ee7c81f1-be36-46df-b08e-5fab08455447"
+    },
+    {
+      "id": "0bbf8adb-3188-447f-aa51-99e6e234a46e",
+      "ts": "2025-12-16T01:26:59.798188Z",
+      "level": "info",
+      "message": "winget.package processed",
+      "data": {
+        "id": "7zip",
+        "changed": false,
+        "success": true,
+        "package_id": "7zip.7zip"
+      },
+      "run_item_id": "39f15e41-4385-4971-9fc2-1b376bad67a6"
+    },
+    {
+      "id": "a4305003-0de6-40f6-b73d-8d4c15504379",
+      "ts": "2025-12-16T01:27:12.374325Z",
+      "level": "info",
+      "message": "script.powershell processed",
+      "data": {
+        "id": "marker",
+        "changed": false,
+        "success": true
+      },
+      "run_item_id": "c893f0d4-0e20-4257-9c8c-3a469605a9fa"
+    },
+    {
+      "id": "5dadae19-26be-485e-b05c-e206547da995",
+      "ts": "2025-12-16T01:27:12.374325Z",
+      "level": "info",
+      "message": "Run finished",
+      "data": {
+        "ok": 3,
+        "failed": 0,
+        "status": "succeeded"
+      },
+      "run_item_id": null
+    },
+    {
+      "id": "1d6d7ec0-48a3-44e6-99d1-faea2e4eee09",
+      "ts": "2025-12-16T01:27:14.796543Z",
+      "level": "info",
+      "message": "Run started",
+      "data": {
+        "mode": "enforce",
+        "resources": 3
+      },
+      "run_item_id": null
+    }
+  ]
+}
