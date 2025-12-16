@@ -4,7 +4,7 @@ FastAPI-based API that handles device enrollment, policy management, effective p
 
 ## Requirements
 - Python 3.11+
-- Postgres 16 (local install or Docker)
+- SQLite (dev quickstart) **or** Postgres 16 (local install or Docker)
 
 ## Local development
 
@@ -17,18 +17,11 @@ FastAPI-based API that handles device enrollment, policy management, effective p
    ```
 
 2. **Configure environment**
-   Create `server/.env` with:
-   ```
-   database_url=postgresql+psycopg://baseliner:baseliner@localhost:5432/baseliner
-   baseliner_token_pepper=<random-string>
-   baseliner_admin_key=<admin-api-key>
-   auto_create_schema=false
-   ```
-   For quick smoke tests without Postgres, point `database_url` at SQLite and set
-   `auto_create_schema=true` so the app will create tables from metadata on
-   startup (Alembic migrations are Postgres-only).
+   Copy `server/.env` as a starting point. Common setups:
+   - **SQLite smoke test (no external DB)** — keep `database_url=sqlite:///./baseliner.db` and set `auto_create_schema=true` so the API will create tables on startup.
+   - **Postgres** — set `database_url` to your DSN, set `auto_create_schema=false`, and use Alembic for migrations.
 
-3. **Run database migrations**
+3. **Run database migrations (Postgres-only)**
    ```bash
    alembic upgrade head
    ```
@@ -38,6 +31,7 @@ FastAPI-based API that handles device enrollment, policy management, effective p
    uvicorn baseliner_server.main:app --reload
    ```
    The service exposes `/health` plus the `api/v1` routes defined under `baseliner_server.api`.
+   - Admin helpers for policy debugging: `GET /api/v1/admin/devices/{device_id}/assignments` to list current assignments and `DELETE /api/v1/admin/devices/{device_id}/assignments` to clear them when iterating on policy changes.
 
 ## Project layout
 - `src/baseliner_server/` — FastAPI app, routers, schemas, and services

@@ -1,6 +1,6 @@
 # Baseliner
 
-Baseliner is an open-source “desired state” baseline system for standardizing deployments and keeping third-party software up to date. The long-term goal is cross-platform support; the current focus is **Windows-first** with **WinGet**-backed package enforcement and a simple policy engine.
+Baseliner is an open-source “desired state” baseline system for standardizing deployments and keeping third-party software up to date. The long-term goal is cross-platform support; the current focus is **Windows-first** with **WinGet**-backed package enforcement and a simple policy engine. The agent now runs in a limited “report-only” mode on non-Windows hosts to help iterate on the server/device contract during development.
 
 This repo currently contains a working **server MVP** (FastAPI + Postgres) and a Windows-focused **agent scaffold**. Together they support:
 - device enrollment + device auth tokens
@@ -29,20 +29,21 @@ This repo currently contains a working **server MVP** (FastAPI + Postgres) and a
 ## Quick start
 
 ### Server (local dev)
-1. Start Postgres locally (or `docker-compose up -d db`).
-2. From `server/`, create a virtual env and install dependencies:
+You can run entirely on SQLite for a quick API smoke test or switch to Postgres for the full migration path.
+
+1. From `server/`, create a virtual env and install dependencies:
    ```bash
    python -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-3. Create `server/.env` with values for `database_url`, `baseliner_token_pepper`, and `baseliner_admin_key`.
-   - Set `auto_create_schema=true` if you point `database_url` at SQLite for quick
-     local smoke tests (Alembic migrations are Postgres-only).
-4. Apply migrations: `alembic upgrade head`.
-5. Run the API: `uvicorn baseliner_server.main:app --reload`.
+2. Copy `server/.env` as a starting point and set `baseliner_token_pepper` / `baseliner_admin_key`.
+   - SQLite quickstart: keep `database_url=sqlite:///./baseliner.db` and `auto_create_schema=true` to let the app create tables on startup.
+   - Postgres: point `database_url` at your DSN, set `auto_create_schema=false`, and run `alembic upgrade head` to apply migrations.
+3. Run the API: `uvicorn baseliner_server.main:app --reload`.
+   - Admin helpers: `GET /api/v1/admin/devices/{device_id}/assignments` lists current policy assignments; `DELETE /api/v1/admin/devices/{device_id}/assignments` clears them for fast policy reset loops.
 
-### Agent (Windows dev box)
+### Agent (Windows-first, cross-platform dev)
 1. From `agent/`, create a virtual env and install dependencies:
    ```powershell
    python -m venv .venv
@@ -51,6 +52,7 @@ This repo currently contains a working **server MVP** (FastAPI + Postgres) and a
    ```
 2. Enroll the device once: `python -m baseliner_agent enroll --server http://localhost:8000 --enroll-token <TOKEN> --device-key MY-DEVICE`.
 3. Execute the policy once and report back: `python -m baseliner_agent run-once --server http://localhost:8000`.
+   - On Windows the agent enforces `winget.package` resources; on macOS/Linux it runs in a report-only mode and stores the device token in plaintext for developer convenience. Override the state folder with `--state-dir` or `BASELINER_STATE_DIR` when testing on non-Windows hosts.
 
 ---
 
@@ -71,6 +73,6 @@ This repo currently contains a working **server MVP** (FastAPI + Postgres) and a
 
 ## Requirements
 
-- Windows dev machine (tested) for the agent
+- Windows dev machine recommended for full agent enforcement; macOS/Linux supported for report-only dev/testing
 - Python 3.11+ for server + agent tooling
-- Postgres 16 (via Docker or local install) for the server
+- SQLite for quick server smoke tests or Postgres 16 for migrations/production-style dev

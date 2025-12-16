@@ -8,7 +8,8 @@ This is the first Windows-focused Baseliner agent scaffold. It supports:
 - simple local state + an offline report queue
 
 ## Requirements
-- Windows 10/11 or Windows Server with `winget` installed
+- Windows 10/11 or Windows Server with `winget` installed (full enforcement)
+- macOS/Linux for dev-only report/testing flows (no winget enforcement; device token stored in plaintext)
 - Python 3.12+
 
 ## Setup (dev)
@@ -22,7 +23,7 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Configuration is resolved in this order: defaults → `agent.toml` → environment variables → CLI overrides. The default config path is `%ProgramData%\Baseliner\agent.toml` and supports either top-level keys or an `[agent]` table.
+Configuration is resolved in this order: defaults → `agent.toml` → environment variables → CLI overrides. The default config path is `%ProgramData%\Baseliner\agent.toml` on Windows or `~/.baseliner/agent.toml` elsewhere (override with `--state-dir`/`BASELINER_STATE_DIR`). It supports either top-level keys or an `[agent]` table.
 
 Environment variable overrides:
 - `BASELINER_SERVER_URL`
@@ -57,9 +58,9 @@ cd scripts
 ```
 
 ## State files
-Default path: `%ProgramData%\Baseliner\`
+Default path: `%ProgramData%\Baseliner\` on Windows or `~/.baseliner/` on macOS/Linux
 - `state.json` (device_id, device_key, last_policy_hash, etc.)
-- `device_token.dpapi` (DPAPI-encrypted device bearer token)
+- `device_token.dpapi` (DPAPI-encrypted device bearer token on Windows; plaintext bytes elsewhere for dev convenience)
 - `queue\*.json` (queued reports if the server is unreachable)
 
 ## Notes
