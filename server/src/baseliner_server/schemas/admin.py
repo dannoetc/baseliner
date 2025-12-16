@@ -21,3 +21,22 @@ class AssignPolicyRequest(BaseModel):
 
 class AssignPolicyResponse(BaseModel):
     ok: bool
+
+
+class PolicyAssignmentSummary(BaseModel):
+    policy_id: str
+    policy_name: str
+    mode: str
+    priority: int
+    is_active: bool
+
+
+class DeviceAssignmentsResponse(BaseModel):
+    device_id: str
+    device_key: str
+    assignments: list[PolicyAssignmentSummary]
+
+
+class ClearAssignmentsResponse(BaseModel):
+    device_id: str
+    removed: int

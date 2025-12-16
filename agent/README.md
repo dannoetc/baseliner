@@ -47,6 +47,15 @@ python -m baseliner_agent enroll --server http://localhost:8000 --enroll-token <
 python -m baseliner_agent run-once --server http://localhost:8000
 ```
 
+### Policy lifecycle + reporting smoketest
+Run this on your Windows dev box to exercise the admin/device contract end-to-end (policy upsert → assign → agent run → run detail diagnostics → winget assertions). It walks through the PuTTY/7-Zip/Firefox phases described in the PRD and pauses after each policy so you can trigger a single agent execution.
+
+```powershell
+cd scripts
+./policy-lifecycle-smoketest.ps1 -Server http://localhost:8000 -AdminKey <ADMIN_KEY> -DeviceKey <YOUR_DEVICE_KEY>
+# add -ClearAssignmentsFirst to delete any existing device assignments before Phase A
+```
+
 ## State files
 Default path: `%ProgramData%\Baseliner\`
 - `state.json` (device_id, device_key, last_policy_hash, etc.)

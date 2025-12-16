@@ -40,3 +40,6 @@ Thumbs.db
 
 # --- Logs ---
 *.lo*
+*.db
+agent_state/
+server/baseliner.db

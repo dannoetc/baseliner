@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     database_url: str
     baseliner_token_pepper: str
     baseliner_admin_key: str
+    auto_create_schema: bool = False
 
 
 settings = Settings()

@@ -20,8 +20,11 @@ from baseliner_server.db.models import (
 from baseliner_server.schemas.admin import (
     AssignPolicyRequest,
     AssignPolicyResponse,
+    ClearAssignmentsResponse,
     CreateEnrollTokenRequest,
     CreateEnrollTokenResponse,
+    DeviceAssignmentsResponse,
+    PolicyAssignmentSummary,
 )
 from baseliner_server.schemas.admin_list import (
     DeviceSummary,
@@ -118,6 +121,66 @@ def assign_policy(payload: AssignPolicyRequest, db: Session = Depends(get_db)) -
 
     db.commit()
     return AssignPolicyResponse(ok=True)
+
+
+@router.get(
+    "/admin/devices/{device_id}/assignments",
+    response_model=DeviceAssignmentsResponse,
+    dependencies=[Depends(require_admin)],
+)
+def list_assignments(device_id: str, db: Session = Depends(get_db)) -> DeviceAssignmentsResponse:
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    rows = (
+        db.execute(
+            select(PolicyAssignment, Policy)
+            .join(Policy, Policy.id == PolicyAssignment.policy_id)
+            .where(PolicyAssignment.device_id == device.id)
+            .order_by(PolicyAssignment.priority.asc())
+        )
+        .all()
+    )
+
+    assignments = [
+        PolicyAssignmentSummary(
+            policy_id=str(policy.id),
+            policy_name=policy.name,
+            mode=assignment.mode.value,
+            priority=assignment.priority,
+            is_active=policy.is_active,
+        )
+        for assignment, policy in rows
+    ]
+
+    return DeviceAssignmentsResponse(
+        device_id=str(device.id), device_key=device.device_key, assignments=assignments
+    )
+
+
+@router.delete(
+    "/admin/devices/{device_id}/assignments",
+    response_model=ClearAssignmentsResponse,
+    dependencies=[Depends(require_admin)],
+)
+def clear_assignments(device_id: str, db: Session = Depends(get_db)) -> ClearAssignmentsResponse:
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    assignments = list(
+        db.scalars(
+            select(PolicyAssignment).where(PolicyAssignment.device_id == device.id)
+        ).all()
+    )
+
+    for assignment in assignments:
+        db.delete(assignment)
+
+    db.commit()
+
+    return ClearAssignmentsResponse(device_id=str(device.id), removed=len(assignments))
 
 
 @router.post(

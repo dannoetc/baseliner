@@ -33,9 +33,10 @@ from .resources import default_handlers
 
 
 def _device_facts() -> dict[str, Any]:
+    os_name = (platform.system() or "").lower() or "unknown"
     return {
         "hostname": socket.gethostname(),
-        "os": "windows",
+        "os": os_name,
         "os_version": platform.version(),
         "arch": platform.machine(),
     }

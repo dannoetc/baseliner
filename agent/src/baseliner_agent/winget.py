@@ -19,6 +19,7 @@ class WingetResult:
 
 
 _WINGET_PATH: str | None = None
+_IS_WINDOWS = os.name == "nt"
 
 _DEFAULT_MSSTORE_REGION = "US"
 
@@ -104,6 +105,9 @@ def _resolve_winget_via_appx_powershell() -> Optional[str]:
 
 
 def resolve_winget() -> str:
+    if not _IS_WINDOWS:
+        raise RuntimeError("winget.exe is only available on Windows")
+
     if _WINGET_PATH:
         p = Path(_WINGET_PATH)
         if _is_system_context() and _looks_like_user_windowsapps_alias(p):
@@ -168,9 +172,13 @@ _MSSTORE_GEO_ERROR_RE = re.compile(
     r"msstore.*requires.*2-letter geographic region", re.IGNORECASE | re.DOTALL
 )
 
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_GetUserGeoName = getattr(_kernel32, "GetUserGeoName", None)
-_SetUserGeoName = getattr(_kernel32, "SetUserGeoName", None)
+try:
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True) if _IS_WINDOWS else None
+except OSError:
+    _kernel32 = None
+
+_GetUserGeoName = getattr(_kernel32, "GetUserGeoName", None) if _kernel32 else None
+_SetUserGeoName = getattr(_kernel32, "SetUserGeoName", None) if _kernel32 else None
 
 if _GetUserGeoName:
     _GetUserGeoName.argtypes = [ctypes.c_wchar_p, ctypes.c_int]

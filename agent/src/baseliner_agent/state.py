@@ -10,8 +10,15 @@ from .security.dpapi import protect_bytes, unprotect_bytes
 
 
 def default_state_dir() -> Path:
-    programdata = os.environ.get("ProgramData") or r"C:\ProgramData"
-    return Path(programdata) / "Baseliner"
+    if os.name == "nt":
+        programdata = os.environ.get("ProgramData") or r"C:\ProgramData"
+        return Path(programdata) / "Baseliner"
+
+    override = os.environ.get("BASELINER_STATE_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    return Path.home() / ".baseliner"
 
 
 def _ensure_dir(p: Path) -> None:

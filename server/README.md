@@ -22,7 +22,11 @@ FastAPI-based API that handles device enrollment, policy management, effective p
    database_url=postgresql+psycopg://baseliner:baseliner@localhost:5432/baseliner
    baseliner_token_pepper=<random-string>
    baseliner_admin_key=<admin-api-key>
+   auto_create_schema=false
    ```
+   For quick smoke tests without Postgres, point `database_url` at SQLite and set
+   `auto_create_schema=true` so the app will create tables from metadata on
+   startup (Alembic migrations are Postgres-only).
 
 3. **Run database migrations**
    ```bash

@@ -37,6 +37,8 @@ This repo currently contains a working **server MVP** (FastAPI + Postgres) and a
    pip install -r requirements.txt
    ```
 3. Create `server/.env` with values for `database_url`, `baseliner_token_pepper`, and `baseliner_admin_key`.
+   - Set `auto_create_schema=true` if you point `database_url` at SQLite for quick
+     local smoke tests (Alembic migrations are Postgres-only).
 4. Apply migrations: `alembic upgrade head`.
 5. Run the API: `uvicorn baseliner_server.main:app --reload`.
 
