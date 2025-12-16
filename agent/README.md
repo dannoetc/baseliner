@@ -20,6 +20,21 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## Configuration
+
+Configuration is resolved in this order: defaults → `agent.toml` → environment variables → CLI overrides. The default config path is `%ProgramData%\Baseliner\agent.toml` and supports either top-level keys or an `[agent]` table.
+
+Environment variable overrides:
+- `BASELINER_SERVER_URL`
+- `BASELINER_ENROLL_TOKEN`
+- `BASELINER_POLL_INTERVAL_SECONDS`
+- `BASELINER_LOG_LEVEL`
+- `BASELINER_STATE_DIR`
+- `BASELINER_TAGS`
+- `BASELINER_WINGET_PATH`
+
+Tags can be supplied via `BASELINER_TAGS` using comma-separated values such as `role=workstation,team=it`.
+
 ## Commands
 
 ### Enroll (one-time)
