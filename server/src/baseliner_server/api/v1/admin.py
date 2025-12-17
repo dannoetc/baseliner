@@ -27,6 +27,9 @@ from baseliner_server.schemas.admin import (
     DeviceAssignmentsResponse,
     ClearAssignmentsResponse,
     PolicyAssignmentOut,
+    DeviceDebugResponse,
+    PolicyAssignmentDebugOut,
+    RunDebugSummary,
 )
 from baseliner_server.schemas.admin_list import (
     DeviceSummary,
@@ -34,6 +37,7 @@ from baseliner_server.schemas.admin_list import (
     RunSummary,
     RunsListResponse,
 )
+from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.policy_admin import UpsertPolicyRequest, UpsertPolicyResponse
 from baseliner_server.schemas.run_detail import RunDetailResponse, RunItemDetail, LogEventDetail
 
@@ -126,24 +130,29 @@ def list_device_assignments(
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    assigns = (
-        db.query(PolicyAssignment)
-        .options(joinedload(PolicyAssignment.policy))
-        .filter(PolicyAssignment.device_id == device_id)
-        .order_by(desc(PolicyAssignment.priority))
+    # Keep ordering consistent with the policy compiler:
+    # priority asc (lower wins), then created_at asc, then assignment id asc.
+    rows = (
+        db.query(PolicyAssignment, Policy)
+        .join(Policy, Policy.id == PolicyAssignment.policy_id)
+        .filter(PolicyAssignment.device_id == device.id)
+        .order_by(
+            PolicyAssignment.priority.asc(),
+            PolicyAssignment.created_at.asc(),
+            PolicyAssignment.id.asc(),
+        )
         .all()
     )
 
-    out = []
-    for a in assigns:
-        pol = a.policy
+    out: list[PolicyAssignmentOut] = []
+    for a, pol in rows:
         out.append(
             PolicyAssignmentOut(
                 policy_id=str(a.policy_id),
-                policy_name=(pol.name if pol else ""),
+                policy_name=pol.name,
                 priority=int(a.priority),
                 mode=_status(a.mode) or "enforce",
-                is_active=bool(pol.is_active) if pol else False,
+                is_active=bool(pol.is_active),
             )
         )
 
@@ -167,11 +176,148 @@ def clear_device_assignments(
 
     removed = (
         db.query(PolicyAssignment)
-        .filter(PolicyAssignment.device_id == device_id)
+        .filter(PolicyAssignment.device_id == device.id)
         .delete(synchronize_session=False)
     )
     db.commit()
     return ClearAssignmentsResponse(device_id=device_id, removed=int(removed or 0))
+
+
+@router.get(
+    "/admin/devices/{device_id}/debug",
+    response_model=DeviceDebugResponse,
+    dependencies=[Depends(require_admin)],
+)
+def debug_device_bundle(
+    device_id: str = Path(..., description="Device UUID"),
+    db: Session = Depends(get_db),
+) -> DeviceDebugResponse:
+    """First-class "debug this device" bundle for operator workflow.
+
+    Returns:
+      - device summary
+      - ordered assignments
+      - compiled effective policy (+ compile metadata)
+      - last run summary + items
+    """
+
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    # Assignments (ordered exactly like the compiler)
+    rows = (
+        db.query(PolicyAssignment, Policy)
+        .join(Policy, Policy.id == PolicyAssignment.policy_id)
+        .filter(PolicyAssignment.device_id == device.id)
+        .order_by(
+            PolicyAssignment.priority.asc(),
+            PolicyAssignment.created_at.asc(),
+            PolicyAssignment.id.asc(),
+        )
+        .all()
+    )
+
+    assignments_out: list[PolicyAssignmentDebugOut] = []
+    for a, pol in rows:
+        assignments_out.append(
+            PolicyAssignmentDebugOut(
+                assignment_id=str(a.id),
+                created_at=a.created_at,
+                policy_id=str(a.policy_id),
+                policy_name=pol.name,
+                priority=int(a.priority),
+                mode=_status(a.mode) or "enforce",
+                is_active=bool(pol.is_active),
+            )
+        )
+
+    # Effective policy (compiled)
+    snap = compile_effective_policy(db, device)
+    effective_policy = EffectivePolicyResponse(
+        policy_id=None,
+        policy_name=None,
+        schema_version="1",
+        mode=snap.mode,
+        document=snap.policy,
+        effective_policy_hash=str(snap.meta.get("effective_hash") or ""),
+        sources=snap.meta.get("sources") or [],
+        compile=snap.meta.get("compile") or {},
+    )
+
+    # Last run (summary + items)
+    last_run = db.scalar(
+        select(Run)
+        .where(Run.device_id == device.id)
+        .order_by(desc(Run.started_at), desc(Run.id))
+        .limit(1)
+    )
+
+    last_run_summary: RunDebugSummary | None = None
+    last_items_out: list[RunItemDetail] = []
+    if last_run:
+        last_run_summary = RunDebugSummary(
+            id=str(last_run.id),
+            started_at=last_run.started_at,
+            ended_at=last_run.ended_at,
+            status=_status(last_run.status),
+            agent_version=last_run.agent_version,
+            effective_policy_hash=last_run.effective_policy_hash,
+            summary=last_run.summary or {},
+            policy_snapshot=last_run.policy_snapshot or {},
+            detail_path=f"/api/v1/admin/runs/{last_run.id}",
+        )
+
+        items = list(
+            db.scalars(
+                select(RunItem)
+                .where(RunItem.run_id == last_run.id)
+                .order_by(RunItem.ordinal.asc())
+            ).all()
+        )
+
+        last_items_out = [
+            RunItemDetail(
+                id=str(i.id),
+                ordinal=i.ordinal,
+                resource_type=i.resource_type,
+                resource_id=i.resource_id,
+                name=i.name,
+                compliant_before=i.compliant_before,
+                compliant_after=i.compliant_after,
+                changed=i.changed,
+                reboot_required=i.reboot_required,
+                status_detect=_status(i.status_detect) or "unknown",
+                status_remediate=_status(i.status_remediate) or "unknown",
+                status_validate=_status(i.status_validate) or "unknown",
+                started_at=i.started_at,
+                ended_at=i.ended_at,
+                evidence=i.evidence or {},
+                error=i.error or {},
+            )
+            for i in items
+        ]
+
+    device_summary = DeviceSummary(
+        id=str(device.id),
+        device_key=device.device_key,
+        hostname=device.hostname,
+        os=device.os,
+        os_version=device.os_version,
+        arch=device.arch,
+        agent_version=device.agent_version,
+        enrolled_at=device.enrolled_at,
+        last_seen_at=device.last_seen_at,
+        tags=device.tags or {},
+    )
+
+    return DeviceDebugResponse(
+        device=device_summary,
+        assignments=assignments_out,
+        effective_policy=effective_policy,
+        last_run=last_run_summary,
+        last_run_items=last_items_out,
+    )
 
 
 @router.post(
@@ -478,50 +624,6 @@ def get_run_detail(
         ],
     )
 
-@router.get(
-    "/admin/devices/{device_id}/assignments",
-    response_model=DeviceAssignmentsResponse,
-    dependencies=[Depends(require_admin)],
-)
-def get_device_assignments(device_id: str, db: Session = Depends(get_db)) -> DeviceAssignmentsResponse:
-    """List policy assignments for a device (debug endpoint).
-
-    We intentionally return assignments *including inactive policies* so admins can see
-    why an expected policy isn't taking effect (e.g., policy disabled, priority order).
-    """
-    dev = db.get(Device, device_id)
-    if not dev:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    rows = (
-        db.query(PolicyAssignment, Policy)
-        .join(Policy, Policy.id == PolicyAssignment.policy_id)
-        .filter(PolicyAssignment.device_id == device_id)
-        .order_by(PolicyAssignment.priority.asc())
-        .all()
-    )
-
-    assignments: list[PolicyAssignmentOut] = []
-    for a, p in rows:
-        assignments.append(
-            PolicyAssignmentOut(
-                policy_id=str(p.id),
-                policy_name=p.name,
-                priority=int(a.priority),
-                mode=a.mode,
-                is_active=bool(p.is_active),
-            )
-        )
-
-    return DeviceAssignmentsResponse(device_id=device_id, assignments=assignments)
-
-
-@router.delete(
-    "/admin/devices/{device_id}/assignments",
-    response_model=ClearAssignmentsResponse,
-    dependencies=[Depends(require_admin)],
-)
-
 @router.post(
     "/admin/compile",
     dependencies=[Depends(require_admin)],
@@ -539,18 +641,4 @@ def compile_policy_for_device(device_id: str, db: Session = Depends(get_db)) -> 
 
     snap = compile_effective_policy(db, dev)
     return {"device_id": str(dev.id), "mode": snap.mode, "policy": snap.policy, "meta": snap.meta}
-
-def clear_device_assignments(device_id: str, db: Session = Depends(get_db)) -> ClearAssignmentsResponse:
-    """Delete *all* policy assignments for a device (test helper)."""
-    dev = db.get(Device, device_id)
-    if not dev:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    removed = (
-        db.query(PolicyAssignment)
-        .filter(PolicyAssignment.device_id == device_id)
-        .delete(synchronize_session=False)
-    )
-    db.commit()
-    return ClearAssignmentsResponse(device_id=device_id, removed=int(removed or 0))
 

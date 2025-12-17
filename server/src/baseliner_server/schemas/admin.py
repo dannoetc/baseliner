@@ -107,6 +107,17 @@ from .run_detail import (  # noqa: E402
 )
 
 
+# ---------------------------------------------------------------------------
+# Device debug bundle (re-exported)
+# ---------------------------------------------------------------------------
+
+from .admin_debug import (  # noqa: E402
+    DeviceDebugResponse,
+    PolicyAssignmentDebugOut,
+    RunDebugSummary,
+)
+
+
 __all__ = [
     # enroll
     "CreateEnrollTokenRequest",
@@ -132,4 +143,8 @@ __all__ = [
     "LogEventDetail",
     "RunDetailResponse",
     "RunOutFull",
+    # debug bundle
+    "DeviceDebugResponse",
+    "PolicyAssignmentDebugOut",
+    "RunDebugSummary",
 ]

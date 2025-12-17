@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import os
 from typing import Any
 
 from baseliner_agent.engine import ItemResult
@@ -15,6 +16,52 @@ from baseliner_agent.winget import (
 )
 
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)*")
+
+_DEFAULT_REMEDIATE_TIMEOUT_S = 900
+
+
+def _get_timeout_seconds(res: dict[str, Any]) -> int:
+    """Get per-resource remediation timeout.
+
+    Policy keys supported (first match wins):
+      - timeout_seconds / timeoutSeconds
+      - remediation_timeout_seconds / remediationTimeoutSeconds
+      - timeout_s / timeout
+
+    Fallback: env BASELINER_WINGET_TIMEOUT_SECONDS, else 900s.
+    """
+    candidates = [
+        res.get("remediation_timeout_seconds"),
+        res.get("remediationTimeoutSeconds"),
+        res.get("timeout_seconds"),
+        res.get("timeoutSeconds"),
+        res.get("timeout_s"),
+        res.get("timeout"),
+    ]
+
+    v = None
+    for c in candidates:
+        if c is None:
+            continue
+        v = c
+        break
+
+    if v is None:
+        env = (os.environ.get("BASELINER_WINGET_TIMEOUT_SECONDS") or "").strip()
+        if env:
+            v = env
+
+    try:
+        s = int(float(v)) if v is not None else _DEFAULT_REMEDIATE_TIMEOUT_S
+    except Exception:
+        s = _DEFAULT_REMEDIATE_TIMEOUT_S
+
+    # Clamp to sane bounds.
+    if s < 30:
+        s = 30
+    if s > 7200:
+        s = 7200
+    return s
 
 
 def _normalize_version_str(v: str | None) -> str | None:
@@ -163,7 +210,11 @@ class WingetPackageHandler:
         logs: list[dict[str, Any]] = []
         started_at = utcnow_iso()
 
-        detect = list_package(package_id, source=source)
+        remediate_timeout_s = _get_timeout_seconds(res)
+        detect_timeout_s = min(120, remediate_timeout_s)
+        validate_timeout_s = detect_timeout_s
+
+        detect = list_package(package_id, source=source, timeout_s=detect_timeout_s)
 
         installed_ver = parse_version_from_list_output(detect.stdout, package_id)
         installed = bool(installed_ver) and detect.exit_code == 0
@@ -195,6 +246,7 @@ class WingetPackageHandler:
                 "pinned_version": pinned_version,
                 "min_version": min_version,
                 "allow_upgrade": allow_upgrade,
+                "timeout_seconds": detect_timeout_s,
             }
         }
 
@@ -209,9 +261,10 @@ class WingetPackageHandler:
         # If winget couldn't even run, stop here but report it.
         if detect.exit_code != 0 and (detect.stderr or "").strip():
             err_text = detect.stderr.strip()
+            err_type = "timeout" if detect.exit_code == 124 else "winget_unavailable"
             error = {
-                "type": "winget_unavailable",
-                "message": "winget failed to execute (often happens under SYSTEM/session 0)",
+                "type": err_type,
+                "message": "winget detect timed out" if err_type == "timeout" else "winget failed to execute (often happens under SYSTEM/session 0)",
                 "detail": truncate(err_text),
                 "exit_code": detect.exit_code,
             }
@@ -244,6 +297,7 @@ class WingetPackageHandler:
                         "source": source,
                         "stderr": truncate(err_text),
                         "exit_code": detect.exit_code,
+                        "timeout_seconds": detect_timeout_s,
                     },
                     "run_item_ordinal": ordinal,
                 }
@@ -287,14 +341,26 @@ class WingetPackageHandler:
         else:
             if need and action:
                 if action == "install":
-                    rem = install_package(package_id, source=source)
+                    rem = install_package(package_id, source=source, timeout_s=remediate_timeout_s)
 
                 elif action == "install_pinned":
-                    rem = install_package(package_id, source=source, version=pinned_version, force=True)
+                    rem = install_package(
+                        package_id,
+                        source=source,
+                        version=pinned_version,
+                        force=True,
+                        timeout_s=remediate_timeout_s,
+                    )
 
                 elif action == "reinstall_pinned":
-                    rem1 = uninstall_package(package_id, source=source)
-                    rem2 = install_package(package_id, source=source, version=pinned_version, force=True)
+                    rem1 = uninstall_package(package_id, source=source, timeout_s=remediate_timeout_s)
+                    rem2 = install_package(
+                        package_id,
+                        source=source,
+                        version=pinned_version,
+                        force=True,
+                        timeout_s=remediate_timeout_s,
+                    )
 
                     class _Combo:
                         exit_code = 0 if (rem1.exit_code == 0 and rem2.exit_code == 0) else (rem2.exit_code or rem1.exit_code or 1)
@@ -322,10 +388,10 @@ class WingetPackageHandler:
                     ]
 
                 elif action == "upgrade":
-                    rem = upgrade_package(package_id, source=source)
+                    rem = upgrade_package(package_id, source=source, timeout_s=remediate_timeout_s)
 
                 elif action == "uninstall":
-                    rem = uninstall_package(package_id, source=source)
+                    rem = uninstall_package(package_id, source=source, timeout_s=remediate_timeout_s)
 
                 else:
                     rem = None
@@ -344,22 +410,31 @@ class WingetPackageHandler:
                         "stdout": truncate(getattr(rem, "stdout", "")),
                         "stderr": truncate(getattr(rem, "stderr", "")),
                         "pinned_version": pinned_version,
+                        "timeout_seconds": remediate_timeout_s,
                     }
                     changed = rem.exit_code == 0
 
                     if rem.exit_code != 0:
                         success = False
-                        error = {
-                            "type": "winget_failed",
-                            "message": f"winget {action} failed",
-                            "exit_code": rem.exit_code,
-                            "detail": truncate(getattr(rem, "stderr", "")),
-                        }
+                        if rem.exit_code == 124:
+                            error = {
+                                "type": "timeout",
+                                "message": f"winget {action} timed out",
+                                "exit_code": rem.exit_code,
+                                "detail": truncate(getattr(rem, "stderr", "")),
+                            }
+                        else:
+                            error = {
+                                "type": "winget_failed",
+                                "message": f"winget {action} failed",
+                                "exit_code": rem.exit_code,
+                                "detail": truncate(getattr(rem, "stderr", "")),
+                            }
             else:
                 status_remediate = "skipped"
 
         # Validate (re-list)
-        val = list_package(package_id, source=source)
+        val = list_package(package_id, source=source, timeout_s=validate_timeout_s)
         ver_after = parse_version_from_list_output(val.stdout, package_id)
         installed_after = bool(ver_after) and val.exit_code == 0
         if not installed_after and val.exit_code == 0:
@@ -388,6 +463,7 @@ class WingetPackageHandler:
             "pinned_version": pinned_version,
             "min_version": min_version,
             "allow_upgrade": allow_upgrade,
+            "timeout_seconds": validate_timeout_s,
         }
 
         # Final success gate

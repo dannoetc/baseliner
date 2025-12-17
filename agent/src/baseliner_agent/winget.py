@@ -34,6 +34,14 @@ _WINGET_SHOW_NO_MATCH_RE = re.compile(
 # Prefer these sources for preflight. We try winget first (fast/quiet), then msstore.
 _PREFLIGHT_SOURCES: list[str] = ["winget", "msstore"]
 
+# Exit code used when we kill a hanging winget process.
+_WINGET_TIMEOUT_EXIT = 124
+
+# Reasonable defaults. Handlers can pass custom timeouts per-resource.
+_DEFAULT_SHOW_TIMEOUT_S = 60
+_DEFAULT_LIST_TIMEOUT_S = 60
+_DEFAULT_REMEDIATE_TIMEOUT_S = 900
+
 
 def configure_winget(path: str | None) -> None:
     global _WINGET_PATH
@@ -305,16 +313,64 @@ def _ensure_winget_settings_best_effort() -> None:
         return
 
 
-def _run(args: list[str], timeout_s: int = 900) -> WingetResult:
+def _taskkill_tree_best_effort(pid: int) -> None:
+    """Best-effort kill process tree on Windows.
+
+    subprocess.run(timeout) does not reliably kill child processes on Windows.
+    If winget spawns installers, they can linger and keep the remediation "hung".
+    """
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=False,
+            timeout=15,
+            shell=False,
+        )
+    except Exception:
+        return
+
+
+def _run(args: list[str], timeout_s: int = _DEFAULT_REMEDIATE_TIMEOUT_S) -> WingetResult:
     if args and args[0].lower() == "winget":
         args = [resolve_winget(), *args[1:]]
 
     _ensure_winget_settings_best_effort()
 
+    # Use Popen+communicate so we can reliably kill process trees on timeout.
     try:
-        p = subprocess.run(args, capture_output=True, text=False, timeout=timeout_s, shell=False)
-        stdout = _clean_output(_decode(p.stdout or b""))
-        stderr = _clean_output(_decode(p.stderr or b""))
+        p = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+        )
+        try:
+            out_b, err_b = p.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired as te:
+            # Try hard to kill winget + any spawned installers.
+            _taskkill_tree_best_effort(p.pid)
+            try:
+                p.kill()
+            except Exception:
+                pass
+            try:
+                out_b, err_b = p.communicate(timeout=5)
+            except Exception:
+                out_b = getattr(te, "stdout", None) or b""
+                err_b = getattr(te, "stderr", None) or b""
+
+            stdout = _clean_output(_decode(out_b or b""))
+            stderr = _clean_output(_decode(err_b or b""))
+            suffix = f"\n(timeout after {timeout_s}s; killed process tree pid={p.pid})"
+            return WingetResult(
+                exit_code=_WINGET_TIMEOUT_EXIT,
+                stdout=stdout,
+                stderr=(stderr + suffix).strip(),
+            )
+
+        stdout = _clean_output(_decode(out_b or b""))
+        stderr = _clean_output(_decode(err_b or b""))
         return WingetResult(exit_code=p.returncode, stdout=stdout, stderr=stderr)
     except OSError as e:
         return WingetResult(
@@ -332,15 +388,20 @@ def _is_list_no_match(r: WingetResult) -> bool:
     return False
 
 
-def _maybe_fix_msstore_geo_and_retry(result: WingetResult, retry_args: list[str]) -> WingetResult:
+def _maybe_fix_msstore_geo_and_retry(result: WingetResult, retry_args: list[str], *, timeout_s: int) -> WingetResult:
     combined = f"{result.stdout}\n{result.stderr}"
     if _MSSTORE_GEO_ERROR_RE.search(combined):
         _ensure_msstore_region()
-        return _run(retry_args)
+        return _run(retry_args, timeout_s=timeout_s)
     return result
 
 
-def list_package(package_id: str, *, source: str | None = "winget") -> WingetResult:
+def list_package(
+    package_id: str,
+    *,
+    source: str | None = "winget",
+    timeout_s: int = _DEFAULT_LIST_TIMEOUT_S,
+) -> WingetResult:
     """
     Detect installed packages.
 
@@ -361,8 +422,8 @@ def list_package(package_id: str, *, source: str | None = "winget") -> WingetRes
     if source:
         args.extend(["--source", source])
 
-    r = _run(args)
-    r = _maybe_fix_msstore_geo_and_retry(r, args)
+    r = _run(args, timeout_s=timeout_s)
+    r = _maybe_fix_msstore_geo_and_retry(r, args, timeout_s=timeout_s)
 
     if _is_list_no_match(r):
         return WingetResult(exit_code=0, stdout=r.stdout, stderr=r.stderr)
@@ -370,7 +431,12 @@ def list_package(package_id: str, *, source: str | None = "winget") -> WingetRes
 
 
 
-def show_package(package_id: str, *, source: Optional[str] = "winget") -> WingetResult:
+def show_package(
+    package_id: str,
+    *,
+    source: Optional[str] = "winget",
+    timeout_s: int = _DEFAULT_SHOW_TIMEOUT_S,
+) -> WingetResult:
     args = [
         "winget",
         "show",
@@ -383,8 +449,8 @@ def show_package(package_id: str, *, source: Optional[str] = "winget") -> Winget
     if source:
         args.extend(["--source", source])
 
-    r = _run(args)
-    r = _maybe_fix_msstore_geo_and_retry(r, args)
+    r = _run(args, timeout_s=timeout_s)
+    r = _maybe_fix_msstore_geo_and_retry(r, args, timeout_s=timeout_s)
     return r
 
 
@@ -420,6 +486,7 @@ def install_package(
     source: str | None = None,
     version: str | None = None,
     force: bool = False,
+    timeout_s: int = _DEFAULT_REMEDIATE_TIMEOUT_S,
 ) -> WingetResult:
     args = [
         "winget",
@@ -440,12 +507,17 @@ def install_package(
         args.append("--force")
     if source:
         args.extend(["--source", source])
-    res = _run(args)
-    return _maybe_fix_msstore_geo_and_retry(res, args)
+    res = _run(args, timeout_s=timeout_s)
+    return _maybe_fix_msstore_geo_and_retry(res, args, timeout_s=timeout_s)
 
 
 
-def upgrade_package(package_id: str, *, source: str | None = None) -> WingetResult:
+def upgrade_package(
+    package_id: str,
+    *,
+    source: str | None = None,
+    timeout_s: int = _DEFAULT_REMEDIATE_TIMEOUT_S,
+) -> WingetResult:
     args = [
         "winget",
         "upgrade",
@@ -461,11 +533,16 @@ def upgrade_package(package_id: str, *, source: str | None = None) -> WingetResu
     ]
     if source:
         args.extend(["--source", source])
-    res = _run(args)
-    return _maybe_fix_msstore_geo_and_retry(res, args)
+    res = _run(args, timeout_s=timeout_s)
+    return _maybe_fix_msstore_geo_and_retry(res, args, timeout_s=timeout_s)
 
 
-def uninstall_package(package_id: str, *, source: str | None = None) -> WingetResult:
+def uninstall_package(
+    package_id: str,
+    *,
+    source: str | None = None,
+    timeout_s: int = _DEFAULT_REMEDIATE_TIMEOUT_S,
+) -> WingetResult:
     args = [
         "winget",
         "uninstall",
@@ -480,8 +557,8 @@ def uninstall_package(package_id: str, *, source: str | None = None) -> WingetRe
     ]
     if source:
         args.extend(["--source", source])
-    res = _run(args)
-    return _maybe_fix_msstore_geo_and_retry(res, args)
+    res = _run(args, timeout_s=timeout_s)
+    return _maybe_fix_msstore_geo_and_retry(res, args, timeout_s=timeout_s)
 
 
 def _find_id_token_and_version(stdout: str, package_id: str) -> tuple[bool, Optional[str]]:

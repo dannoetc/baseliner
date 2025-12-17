@@ -1,0 +1,183 @@
+{
+  "device": {
+    "id": "31d9ea4d-8181-4946-95ae-6488c19898bc",
+    "device_key": "TEST-DEVICE-001",
+    "hostname": "DESKTOP-FTVVO4A",
+    "os": "windows",
+    "os_version": "10.0.26200",
+    "arch": "AMD64",
+    "agent_version": "0.1.0-dev",
+    "enrolled_at": "2025-12-13T00:32:59.47117Z",
+    "tags": {
+      "env": "dev"
+    },
+    "last_seen_at": "2025-12-17T00:59:29.49499Z",
+    "last_run": null,
+    "health": null
+  },
+  "assignments": [
+    {
+      "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
+      "created_at": "2025-12-13T01:47:56.325923Z",
+      "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+      "policy_name": "baseliner-windows-core",
+      "priority": 100,
+      "mode": "enforce",
+      "is_active": true
+    }
+  ],
+  "effective_policy": {
+    "policy_id": null,
+    "policy_name": null,
+    "schema_version": "1",
+    "mode": "enforce",
+    "document": {
+      "resources": [
+        {
+          "id": "VideoLAN.VLC",
+          "type": "winget.package",
+          "ensure": "present",
+          "allowUpgrade": true
+        },
+        {
+          "id": "Mozilla.Firefox",
+          "type": "winget.package",
+          "ensure": "present",
+          "minVersion": "120.0.0",
+          "allowUpgrade": true
+        },
+        {
+          "id": "7zip.7zip",
+          "type": "winget.package",
+          "ensure": "present",
+          "allowUpgrade": true
+        },
+        {
+          "id": "timezone",
+          "name": "Set Time Zone to Eastern",
+          "type": "script.powershell",
+          "detect": "if ((Get-TimeZone).Id -eq 'Eastern Standard Time') { exit 0 } else { exit 1 }",
+          "remediate": "Set-TimeZone -Id 'Eastern Standard Time'"
+        }
+      ]
+    },
+    "effective_policy_hash": "9c179eb34c52fa23a3e92c8b4d5eff73e53509d6f4f0bf482809ac822eeed393",
+    "sources": [
+      {
+        "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+        "policy_name": "baseliner-windows-core",
+        "priority": 100,
+        "assignment_mode": "enforce",
+        "schema_version": "1.0"
+      }
+    ],
+    "compile": {
+      "merge": {
+        "priority": "lower numeric priority wins (processed first)",
+        "tie_breakers": [
+          "assignment.created_at asc",
+          "assignment.id asc"
+        ],
+        "dedupe": "first-wins per resource key (type,id); winget.package de-duped by catalog id when present",
+        "mode": "audit only if all active assignments are audit; otherwise enforce"
+      },
+      "assignments": [
+        {
+          "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
+          "created_at": "2025-12-13T01:47:56.325923Z",
+          "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+          "policy_name": "baseliner-windows-core",
+          "priority": 100,
+          "assignment_mode": "enforce",
+          "schema_version": "1.0"
+        }
+      ],
+      "resources": {
+        "winget.package::videolan.vlc": {
+          "resource": {
+            "type": "winget.package",
+            "id": "videolan.vlc"
+          },
+          "source": {
+            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
+            "created_at": "2025-12-13T01:47:56.325923Z",
+            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+            "policy_name": "baseliner-windows-core",
+            "priority": 100,
+            "assignment_mode": "enforce",
+            "schema_version": "1.0"
+          },
+          "overrides": []
+        },
+        "winget.package::mozilla.firefox": {
+          "resource": {
+            "type": "winget.package",
+            "id": "mozilla.firefox"
+          },
+          "source": {
+            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
+            "created_at": "2025-12-13T01:47:56.325923Z",
+            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+            "policy_name": "baseliner-windows-core",
+            "priority": 100,
+            "assignment_mode": "enforce",
+            "schema_version": "1.0"
+          },
+          "overrides": []
+        },
+        "winget.package::7zip.7zip": {
+          "resource": {
+            "type": "winget.package",
+            "id": "7zip.7zip"
+          },
+          "source": {
+            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
+            "created_at": "2025-12-13T01:47:56.325923Z",
+            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+            "policy_name": "baseliner-windows-core",
+            "priority": 100,
+            "assignment_mode": "enforce",
+            "schema_version": "1.0"
+          },
+          "overrides": []
+        },
+        "script.powershell::timezone": {
+          "resource": {
+            "type": "script.powershell",
+            "id": "timezone"
+          },
+          "source": {
+            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
+            "created_at": "2025-12-13T01:47:56.325923Z",
+            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+            "policy_name": "baseliner-windows-core",
+            "priority": 100,
+            "assignment_mode": "enforce",
+            "schema_version": "1.0"
+          },
+          "overrides": []
+        }
+      },
+      "conflicts": []
+    }
+  },
+  "last_run": {
+    "id": "d2dbf604-a2e0-4aa6-bd80-38cce35fa072",
+    "started_at": "2025-12-15T22:59:00.768458Z",
+    "ended_at": "2025-12-15T22:59:00.768458Z",
+    "status": "succeeded",
+    "agent_version": "0.1.0-dev",
+    "effective_policy_hash": null,
+    "summary": {
+      "ok": 0,
+      "failed": 0,
+      "itemsTotal": 0
+    },
+    "policy_snapshot": {
+      "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
+      "policy_name": "baseliner-windows-core"
+    },
+    "detail_path": "/api/v1/admin/runs/d2dbf604-a2e0-4aa6-bd80-38cce35fa072"
+  },
+  "last_run_items": []
+}

@@ -85,11 +85,19 @@ def compile_effective_policy(db: Session, device: Device | str | uuid.UUID) -> P
         dev = db.get(Device, device_id)
         device_key = dev.device_key if dev else None
 
+    # Deterministic ordering is critical for operator trust:
+    #   1) priority ASC (lower wins)
+    #   2) assignment created_at ASC
+    #   3) assignment id ASC
     stmt = (
         select(PolicyAssignment, Policy)
         .join(Policy, Policy.id == PolicyAssignment.policy_id)
         .where(PolicyAssignment.device_id == device_id, Policy.is_active.is_(True))
-        .order_by(PolicyAssignment.priority.asc())
+        .order_by(
+            PolicyAssignment.priority.asc(),
+            PolicyAssignment.created_at.asc(),
+            PolicyAssignment.id.asc(),
+        )
     )
 
     rows = db.execute(stmt).all()
@@ -116,6 +124,18 @@ def compile_effective_policy(db: Session, device: Device | str | uuid.UUID) -> P
                 "assignments": 0,
                 "sources": sources,
                 "effective_hash": effective_hash,
+                "compile": {
+                    "merge": {
+                        "priority": "lower numeric priority wins (processed first)",
+                        "tie_breakers": ["assignment.created_at asc", "assignment.id asc"],
+                        "dedupe": "first-wins per resource key (type,id); winget.package de-duped by catalog id when present",
+                        "mode": "audit only if all active assignments are audit; otherwise enforce",
+                    },
+                    "assignments": [],
+                    "resources": [],
+                    "resources_index": {},
+                    "conflicts": [],
+                },
             },
         )
 
@@ -123,34 +143,79 @@ def compile_effective_policy(db: Session, device: Device | str | uuid.UUID) -> P
     modes = [a.mode for (a, _p) in rows if a and a.mode]
     mode = "audit" if modes and all(m == "audit" for m in modes) else "enforce"
 
-    # Merge resources
+    # Merge resources (first-wins by deterministic assignment ordering)
     merged: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
     sources: list[dict[str, Any]] = []
+    compile_assignments: list[dict[str, Any]] = []
+    # Operator-facing compile metadata.
+    # Prefer list-based structures for UIs/CLIs, but keep an index for convenience.
+    compile_resources: list[dict[str, Any]] = []
+    compile_resources_index: dict[str, dict[str, Any]] = {}
+    compile_conflicts: list[dict[str, Any]] = []
+
+    def _key_str(key: tuple[str, str]) -> str:
+        # Human-friendly canonical key used by compile metadata.
+        return f"{key[0]}:{key[1]}"
+
     for (a, p) in rows:
-        sources.append(
-            {
-                "policy_id": str(p.id),
-                "policy_name": p.name,
-                "priority": int(a.priority),
-                "assignment_mode": a.mode,
-                "schema_version": p.schema_version,
-            }
-        )
+        src = {
+            "assignment_id": str(a.id),
+            "created_at": a.created_at,
+            "policy_id": str(p.id),
+            "policy_name": p.name,
+            "priority": int(a.priority),
+            "assignment_mode": a.mode,
+            "schema_version": p.schema_version,
+        }
+        sources.append({k: v for k, v in src.items() if k != "assignment_id" and k != "created_at"})
+        compile_assignments.append(src)
 
         for res in _iter_resources(p.document):
             key = _resource_key(res)
             if key is None:
-                # Keep "weird" resources rather than silently dropping them,
-                # but don't attempt to de-dupe them.
+                # Keep "weird" resources rather than silently dropping them.
                 merged.append(res)
                 continue
 
+            ks = _key_str(key)
             if key in seen:
-                continue  # first-wins
+                # Record conflict against the existing winner.
+                winner = compile_resources_index.get(ks) or {}
+                winner_source = winner.get("source")
+                loser = {
+                    "source": src,
+                    "resource": {"type": key[0], "id": key[1]},
+                }
+                compile_conflicts.append(
+                    {
+                        "key": {"type": key[0], "id": key[1]},
+                        "key_str": ks,
+                        "decision": "kept_existing",
+                        "winner": winner_source,
+                        "loser": src,
+                        "reason": "first-wins (ordered by priority, created_at, assignment_id)",
+                    }
+                )
+                # Also keep a per-resource override trail.
+                winner_overrides = winner.setdefault("overrides", [])
+                winner_overrides.append(loser)
+                compile_resources_index[ks] = winner
+                continue
+
             seen.add(key)
             merged.append(res)
+            entry = {
+                "key": {"type": key[0], "id": key[1]},
+                "key_str": ks,
+                # Include the effective resource as compiled (useful for UI/CLI inspection).
+                "effective_resource": res,
+                "source": src,
+                "overrides": [],
+            }
+            compile_resources.append(entry)
+            compile_resources_index[ks] = entry
 
     policy_doc = {"resources": merged}
 
@@ -172,5 +237,17 @@ def compile_effective_policy(db: Session, device: Device | str | uuid.UUID) -> P
             "assignments": len(rows),
             "sources": sources,
             "effective_hash": effective_hash,
+            "compile": {
+                "merge": {
+                    "priority": "lower numeric priority wins (processed first)",
+                    "tie_breakers": ["assignment.created_at asc", "assignment.id asc"],
+                    "dedupe": "first-wins per resource key (type,id); winget.package de-duped by catalog id when present",
+                    "mode": "audit only if all active assignments are audit; otherwise enforce",
+                },
+                "assignments": compile_assignments,
+                "resources": compile_resources,
+                "resources_index": compile_resources_index,
+                "conflicts": compile_conflicts,
+            },
         },
     )

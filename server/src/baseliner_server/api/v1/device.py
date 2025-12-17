@@ -74,11 +74,12 @@ def get_effective_policy(
     resp = EffectivePolicyResponse(
         policy_id=None,
         policy_name=None,
-        schema_version='1',
+        schema_version="1",
         mode=snap.mode,
         document=snap.policy,
-        effective_policy_hash=str(snap.meta.get('effective_hash') or ''),
-        sources=snap.meta.get('sources') or [],
+        effective_policy_hash=str(snap.meta.get("effective_hash") or ""),
+        sources=snap.meta.get("sources") or [],
+        compile=snap.meta.get("compile") or {},
     )
     return resp
 
