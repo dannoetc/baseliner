@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+# NOTE: dependencies live in api.deps; core.auth only contains the auth logic.
 from baseliner_server.api.deps import get_current_device, get_db
 from baseliner_server.core.policy_hash import compute_effective_policy_hash
+from baseliner_server.services.policy_compiler import compile_effective_policy
 from baseliner_server.db.models import Device, LogEvent, Policy, PolicyAssignment, Run, RunItem
 from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.report import SubmitReportRequest, SubmitReportResponse
@@ -62,63 +64,23 @@ def get_effective_policy(
     device: Device = Depends(get_current_device),
     db: Session = Depends(get_db),
 ) -> EffectivePolicyResponse:
-    # MVP: choose highest priority active policy assignment (lowest priority number wins)
-    stmt = (
-        select(PolicyAssignment, Policy)
-        .join(Policy, Policy.id == PolicyAssignment.policy_id)
-        .where(PolicyAssignment.device_id == device.id)
-        .where(Policy.is_active == True)  # noqa: E712
-        .order_by(PolicyAssignment.priority.asc())
-        .limit(1)
-    )
-    row = db.execute(stmt).first()
+    """Return the *effective* policy for this device.
 
-    if not row:
-        resp = EffectivePolicyResponse(mode="enforce", document={}, sources=[])
-        resp.effective_policy_hash = compute_effective_policy_hash(
-            policy_id=resp.policy_id,
-            policy_name=resp.policy_name,
-            schema_version=resp.schema_version,
-            mode=resp.mode,
-            document=resp.document,
-            sources=resp.sources,
-        )
-        return resp
-
-    assignment, policy = row
-
-    # Optional provenance (helps explain "why did I get this policy?")
-    sources = [
-        {
-            "type": "device_assignment",
-            "device_id": str(device.id),
-            "policy_id": str(policy.id),
-            "priority": assignment.priority,
-            "mode": assignment.mode.value,
-        }
-    ]
-
+    Devices can have multiple policy assignments. We compile them into a single
+    document by priority (lowest number first), with 'first-wins' semantics on
+    (type,id) for resources.
+    """
+    snap = compile_effective_policy(db, device)
     resp = EffectivePolicyResponse(
-        policy_id=str(policy.id),
-        policy_name=policy.name,
-        schema_version=policy.schema_version,
-        mode=assignment.mode.value,
-        document=policy.document,
-        sources=sources,
+        policy_id=None,
+        policy_name=None,
+        schema_version='1',
+        mode=snap.mode,
+        document=snap.policy,
+        effective_policy_hash=str(snap.meta.get('effective_hash') or ''),
+        sources=snap.meta.get('sources') or [],
     )
-
-    # Server-side effective hash (so agents can skip if unchanged)
-    resp.effective_policy_hash = compute_effective_policy_hash(
-        policy_id=resp.policy_id,
-        policy_name=resp.policy_name,
-        schema_version=resp.schema_version,
-        mode=resp.mode,
-        document=resp.document,
-        sources=resp.sources,
-    )
-
     return resp
-
 
 @router.post("/device/reports", response_model=SubmitReportResponse)
 def submit_report(

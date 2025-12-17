@@ -14,3 +14,8 @@ class UpsertPolicyResponse(BaseModel):
     policy_id: str
     name: str
     is_active: bool
+
+
+# Backwards-compatible aliases (older clients/tests referenced these names)
+PolicyUpsertRequest = UpsertPolicyRequest
+PolicyUpsertResponse = UpsertPolicyResponse

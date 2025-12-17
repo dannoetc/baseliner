@@ -47,3 +47,7 @@ class RunDetailResponse(BaseModel):
 
     items: list[RunItemDetail] = []
     logs: list[LogEventDetail] = []
+
+
+# Backwards-compatible alias (older clients/tests referenced this symbol)
+RunOutFull = RunDetailResponse

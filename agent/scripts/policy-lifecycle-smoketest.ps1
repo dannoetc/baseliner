@@ -3,10 +3,12 @@ param(
     [string]$AdminKey = "change-me-too",
     [string]$DeviceKey = "DESKTOP-FTVVO4A",
     [string]$PolicyName = "policy-lifecycle-smoketest",
-    [int]$Priority = 9999
+    [int]$Priority = 9999,
+    [switch]$ClearAssignmentsFirst = $false
 )
 
 <#[
+
     Policy + reporting lifecycle harness.
 
     This script exercises the full admin/device contract end-to-end:
@@ -23,6 +25,13 @@ param(
     Run this on the Windows device where the agent lives. After each phase,
     trigger a single agent run (Task Scheduler/"baseliner-agent run" etc.)
     before pressing Enter to continue.
+
+    Key improvements in this patched version:
+      - Waits for a NEW run id per phase (prevents re-reading the prior run)
+      - Optional: isolate test by clearing assignments up-front
+      - Prints compiled effective policy snapshot via /api/v1/admin/compile (if available)
+      - More robust winget item matching + debug dumps when expected items are missing
+
 #>
 
 $Headers = @{ "X-Admin-Key" = $AdminKey }
@@ -32,6 +41,14 @@ function Get-DeviceId {
     $d = $resp.items | Where-Object { $_.device_key -eq $DeviceKey } | Select-Object -First 1
     if (-not $d) { throw "Device not found for device_key=$DeviceKey" }
     return $d.id
+}
+
+function Get-Assignments([string]$DeviceId) {
+    Invoke-RestMethod -Method Get -Uri "$Server/api/v1/admin/devices/$DeviceId/assignments" -Headers $Headers
+}
+
+function Clear-Assignments([string]$DeviceId) {
+    Invoke-RestMethod -Method Delete -Uri "$Server/api/v1/admin/devices/$DeviceId/assignments" -Headers $Headers
 }
 
 function Upsert-Policy([hashtable]$Policy) {
@@ -54,21 +71,32 @@ function Assign-Policy([string]$DeviceId, [string]$PolicyName) {
 
 function Get-DeviceHealth {
     (Invoke-RestMethod -Method Get -Uri "$Server/api/v1/admin/devices?include_health=true&limit=500&offset=0" -Headers $Headers).items |
-        Where-Object { $_.device_key -eq $DeviceKey } |
-        Select-Object -First 1
+    Where-Object { $_.device_key -eq $DeviceKey } |
+    Select-Object -First 1
 }
 
 function Print-HealthRow($dev) {
     $dev | Select-Object hostname, device_key,
-        @{n = "health"; e = { $_.health.status } },
-        @{n = "reason"; e = { $_.health.reason } },
-        @{n = "seen_age_s"; e = { $_.health.seen_age_seconds } },
-        @{n = "run_age_s"; e = { $_.health.run_age_seconds } },
-        @{n = "offline"; e = { $_.health.offline } },
-        @{n = "stale"; e = { $_.health.stale } },
-        @{n = "last_run"; e = { $_.last_run.id } },
-        @{n = "status"; e = { $_.last_run.status } } |
-        Format-Table -AutoSize
+    @{n = "health"; e = { $_.health.status } },
+    @{n = "reason"; e = { $_.health.reason } },
+    @{n = "seen_age_s"; e = { $_.health.seen_age_seconds } },
+    @{n = "run_age_s"; e = { $_.health.run_age_seconds } },
+    @{n = "offline"; e = { $_.health.offline } },
+    @{n = "stale"; e = { $_.health.stale } },
+    @{n = "last_run"; e = { $_.last_run.id } },
+    @{n = "status"; e = { $_.last_run.status } } |
+    Format-Table -AutoSize
+}
+
+function Show-Assignments($resp) {
+    "`n=== CURRENT ASSIGNMENTS ===" | Write-Host
+    if (-not $resp.assignments -or $resp.assignments.Count -eq 0) {
+        "(none)" | Write-Host
+        return
+    }
+    $resp.assignments |
+    Select-Object policy_name, policy_id, priority, mode, is_active |
+    Format-Table -AutoSize
 }
 
 function Get-Run([string]$RunId) {
@@ -89,58 +117,58 @@ function Show-Failures($run) {
     }
 
     $bad |
-        Select-Object ordinal, name, resource_type, resource_id, status_detect, status_remediate, status_validate,
-        compliant_before, compliant_after, changed,
-        @{n = "err_type"; e = { $_.error.type } },
-        @{n = "err_msg"; e = { $_.error.message } },
-        @{n = "rem_exit"; e = { $_.evidence.remediate.exit_code } },
-        @{n = "rem_stderr"; e = { $_.evidence.remediate.stderr } } |
-        Format-Table -AutoSize
+    Select-Object ordinal, name, resource_type, resource_id, status_detect, status_remediate, status_validate,
+    compliant_before, compliant_after, changed,
+    @{n = "err_type"; e = { $_.error.type } },
+    @{n = "err_msg"; e = { $_.error.message } },
+    @{n = "rem_exit"; e = { $_.evidence.remediate.exit_code } },
+    @{n = "rem_stderr"; e = { $_.evidence.remediate.stderr } } |
+    Format-Table -AutoSize
 }
 
 function Show-RunItemsOverview($run) {
     "`n=== RUN ITEMS OVERVIEW (run $($run.id)) ===" | Write-Host
     $run.items |
-        Select-Object ordinal, resource_type, resource_id, name, status_detect, status_remediate, status_validate |
-        Format-Table -AutoSize
+    Select-Object ordinal, resource_type, resource_id, name, status_detect, status_remediate, status_validate |
+    Format-Table -AutoSize
 }
 
 function Show-WingetItems($run) {
     "`n=== WINGET ITEMS (run $($run.id)) ===" | Write-Host
 
     $run.items |
-        Where-Object { $_.resource_type -eq "winget.package" } |
-        ForEach-Object {
-            $det = $_.evidence.detect
-            $rem = $_.evidence.remediate
-            $val = $_.evidence.validate
+    Where-Object { $_.resource_type -eq "winget.package" } |
+    ForEach-Object {
+        $det = $_.evidence.detect
+        $rem = $_.evidence.remediate
+        $val = $_.evidence.validate
 
-            [pscustomobject]@{
-                ordinal              = $_.ordinal
-                name                 = $_.name
-                resource_id          = $_.resource_id
+        [pscustomobject]@{
+            ordinal              = $_.ordinal
+            name                 = $_.name
+            resource_id          = $_.resource_id
 
-                requested_package_id = $det.requested_package_id
-                source               = $det.source
-                action               = if ($rem) { $rem.action } else { $null }
+            requested_package_id = $det.requested_package_id
+            source               = $det.source
+            action               = if ($rem) { $rem.action } else { $null }
 
-                status_detect        = $_.status_detect
-                status_remediate     = $_.status_remediate
-                status_validate      = $_.status_validate
+            status_detect        = $_.status_detect
+            status_remediate     = $_.status_remediate
+            status_validate      = $_.status_validate
 
-                detect_installed     = $det.installed
-                detect_version       = $det.version
+            detect_installed     = $det.installed
+            detect_version       = $det.version
 
-                validate_installed   = $val.installed
-                validate_version     = $val.version
+            validate_installed   = $val.installed
+            validate_version     = $val.version
 
-                compliant_before     = $_.compliant_before
-                compliant_after      = $_.compliant_after
-                changed              = $_.changed
+            compliant_before     = $_.compliant_before
+            compliant_after      = $_.compliant_after
+            changed              = $_.changed
 
-                remediate_exit       = if ($rem) { $rem.exit_code } else { $null }
-            }
-        } | Format-Table -AutoSize
+            remediate_exit       = if ($rem) { $rem.exit_code } else { $null }
+        }
+    } | Format-Table -AutoSize
 }
 
 function To-SemVer([string]$s) {
@@ -156,17 +184,32 @@ function To-SemVer([string]$s) {
     return [version]$fixed
 }
 
+function Dump-WingetKeys($run) {
+    $rows = $run.items | Where-Object { $_.resource_type -eq "winget.package" } | ForEach-Object {
+        [pscustomobject]@{
+            resource_id          = $_.resource_id
+            requested_package_id = $_.evidence.detect.requested_package_id
+            validate_installed   = $_.evidence.validate.installed
+            validate_version     = $_.evidence.validate.version
+        }
+    }
+    "`n--- winget keys present in run ---" | Write-Host
+    $rows | Format-Table -AutoSize
+}
+
 function Find-WingetItem($run, [string]$StableId, [string]$PackageId) {
     $pkgId = ($PackageId ?? "").Trim()
     $sid = ($StableId ?? "").Trim()
 
-    # 1) stable resource id
-    $it = $run.items | Where-Object { $_.resource_type -eq "winget.package" -and $_.resource_id -eq $sid } | Select-Object -First 1
-    if ($it) { return $it }
+    # 1) stable resource id exact (case-insensitive)
+    if ($sid) {
+        $it = $run.items | Where-Object { $_.resource_type -eq "winget.package" -and ($_.resource_id -ieq $sid) } | Select-Object -First 1
+        if ($it) { return $it }
+    }
 
-    # 2) resource_id equals package id
+    # 2) resource_id equals package id (some implementations emit package_id as resource_id)
     if ($pkgId) {
-        $it = $run.items | Where-Object { $_.resource_type -eq "winget.package" -and $_.resource_id -eq $pkgId } | Select-Object -First 1
+        $it = $run.items | Where-Object { $_.resource_type -eq "winget.package" -and ($_.resource_id -ieq $pkgId) } | Select-Object -First 1
         if ($it) { return $it }
     }
 
@@ -175,23 +218,12 @@ function Find-WingetItem($run, [string]$StableId, [string]$PackageId) {
         $it = $run.items | Where-Object {
             $_.resource_type -eq "winget.package" -and
             $_.evidence -and $_.evidence.detect -and
-            $_.evidence.detect.requested_package_id -eq $pkgId
+            ($_.evidence.detect.requested_package_id -ieq $pkgId)
         } | Select-Object -First 1
         if ($it) { return $it }
     }
 
     return $null
-}
-
-function Dump-WingetKeys($run) {
-    $rows = $run.items | Where-Object { $_.resource_type -eq "winget.package" } | ForEach-Object {
-        [pscustomobject]@{
-            resource_id          = $_.resource_id
-            requested_package_id = $_.evidence.detect.requested_package_id
-        }
-    }
-    "`n--- winget keys present in run ---" | Write-Host
-    $rows | Format-Table -AutoSize
 }
 
 function Assert-WingetInstalled($run, [string]$StableId, [string]$PackageId, [bool]$ExpectInstalled) {
@@ -237,6 +269,31 @@ function Assert-WingetVersionMin($run, [string]$StableId, [string]$PackageId, [s
     }
 }
 
+function Wait-ForNewRunId([string]$OldRunId, [int]$TimeoutSeconds = 90) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        Start-Sleep -Seconds 2
+        $dev = Get-DeviceHealth
+        $newId = [string]$dev.last_run.id
+        if ($newId -and $newId -ne $OldRunId) { return $newId }
+    } while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds)
+
+    throw "Timed out waiting for a new run id. Old=$OldRunId Current=$([string](Get-DeviceHealth).last_run.id)"
+}
+
+function Try-Show-CompiledPolicy([string]$DeviceId, [string]$PhaseLabel) {
+    # /api/v1/admin/compile exists in some branches; don't fail the run if missing.
+    try {
+        $snap = Invoke-RestMethod -Method Post -Uri "$Server/api/v1/admin/compile?device_id=$DeviceId" -Headers $Headers
+        "`n=== COMPILED EFFECTIVE POLICY ($PhaseLabel) ===" | Write-Host
+        ($snap | ConvertTo-Json -Depth 80) | Write-Host
+    }
+    catch {
+        # Most common: 404 Not Found if endpoint isn't present.
+        "`n(note) compile endpoint unavailable for $PhaseLabel $($_.Exception.Message)" | Write-Host
+    }
+}
+
 function Run-Phase(
     [string]$PhaseLabel,
     [hashtable]$Policy,
@@ -248,18 +305,25 @@ function Run-Phase(
     "`n==> (Re)assigning policy to device (priority=$Priority)..." | Write-Host
     Assign-Policy -DeviceId $DeviceId -PolicyName $PolicyName
 
+    # show compiled snapshot if available (helps prove what the agent should see)
+    Try-Show-CompiledPolicy -DeviceId $DeviceId -PhaseLabel $PhaseLabel
+
     "`n==> Device health BEFORE $PhaseLabel run:" | Write-Host
-    $dev = Get-DeviceHealth
-    Print-HealthRow $dev
+    $before = Get-DeviceHealth
+    $oldRunId = [string]$before.last_run.id
+    Print-HealthRow $before
 
     "`n*** Now run the agent ON THE DEVICE once, then press Enter here. ***" | Write-Host
     Read-Host | Out-Null
 
-    "`n==> Device health AFTER $PhaseLabel run:" | Write-Host
-    $dev = Get-DeviceHealth
-    Print-HealthRow $dev
+    # Wait for a NEW run id (prevents Phase B printing Phase A again)
+    $newRunId = Wait-ForNewRunId -OldRunId $oldRunId
 
-    $run = Get-Run $dev.last_run.id
+    "`n==> Device health AFTER $PhaseLabel run:" | Write-Host
+    $after = Get-DeviceHealth
+    Print-HealthRow $after
+
+    $run = Get-Run $newRunId
     Show-Failures $run
     Show-RunItemsOverview $run
     Show-WingetItems $run
@@ -282,16 +346,33 @@ function Run-Phase(
 
 $DeviceId = Get-DeviceId
 
+"`n==> Device assignments before test" | Write-Host
+$assign = Get-Assignments -DeviceId $DeviceId
+Show-Assignments $assign
+
+if ($ClearAssignmentsFirst) {
+    "`n==> Clearing existing assignments..." | Write-Host
+    $cleared = Clear-Assignments -DeviceId $DeviceId
+    "Removed $($cleared.removed) assignment(s)." | Write-Host
+
+    $assign = Get-Assignments -DeviceId $DeviceId
+    Show-Assignments $assign
+}
+
+# Important: choose stable ids that are consistent *within this test policy*.
+# The server/compiler should de-dupe winget packages by package_id to avoid collisions with other policies,
+# but for this harness we keep ids stable and predictable.
 $R_Putty_Present = @{ type = "winget.package"; id = "putty"; name = "PuTTY"; package_id = "PuTTY.PuTTY"; ensure = "present" }
-$R_Putty_Absent  = @{ type = "winget.package"; id = "putty"; name = "PuTTY"; package_id = "PuTTY.PuTTY"; ensure = "absent" }
-$R_7Zip_Present  = @{ type = "winget.package"; id = "7zip";  name = "7-Zip"; package_id = "7zip.7zip"; ensure = "present" }
-$R_7Zip_Absent   = @{ type = "winget.package"; id = "7zip";  name = "7-Zip"; package_id = "7zip.7zip"; ensure = "absent" }
+$R_Putty_Absent = @{ type = "winget.package"; id = "putty"; name = "PuTTY"; package_id = "PuTTY.PuTTY"; ensure = "absent" }
+$R_7Zip_Present = @{ type = "winget.package"; id = "7zip"; name = "7-Zip"; package_id = "7zip.7zip"; ensure = "present" }
+$R_7Zip_Absent = @{ type = "winget.package"; id = "7zip"; name = "7-Zip"; package_id = "7zip.7zip"; ensure = "absent" }
 
 $R_Fx_145 = @{
     type = "winget.package"; id = "firefox"; name = "Firefox"
     package_id = "Mozilla.Firefox"; ensure = "present"
     version = "145.0.2"
 }
+
 $R_Fx_Min146 = @{
     type = "winget.package"; id = "firefox"; name = "Firefox"
     package_id = "Mozilla.Firefox"; ensure = "present"
@@ -299,44 +380,56 @@ $R_Fx_Min146 = @{
     min_version = "146.0"
 }
 
-$PolicyA = @{ name = $PolicyName; description = "Phase A"; schema_version = "1"; is_active = $true; document = @{ resources = @(
-    $R_Putty_Present, $R_7Zip_Present) } }
-$PolicyB = @{ name = $PolicyName; description = "Phase B"; schema_version = "1"; is_active = $true; document = @{ resources = @(
-    $R_Putty_Absent, $R_7Zip_Present) } }
-$PolicyC = @{ name = $PolicyName; description = "Phase C"; schema_version = "1"; is_active = $true; document = @{ resources = @(
-    $R_Putty_Absent, $R_7Zip_Absent) } }
-$PolicyD = @{ name = $PolicyName; description = "Phase D"; schema_version = "1"; is_active = $true; document = @{ resources = @(
-    $R_Putty_Present, $R_7Zip_Present) } }
+$PolicyA = @{
+    name = $PolicyName; description = "Phase A"; schema_version = "1"; is_active = $true
+    document = @{ resources = @($R_Putty_Present, $R_7Zip_Present) }
+}
+$PolicyB = @{
+    name = $PolicyName; description = "Phase B"; schema_version = "1"; is_active = $true
+    document = @{ resources = @($R_Putty_Absent, $R_7Zip_Present) }
+}
+$PolicyC = @{
+    name = $PolicyName; description = "Phase C"; schema_version = "1"; is_active = $true
+    document = @{ resources = @($R_Putty_Absent, $R_7Zip_Absent) }
+}
+$PolicyD = @{
+    name = $PolicyName; description = "Phase D"; schema_version = "1"; is_active = $true
+    document = @{ resources = @($R_Putty_Present, $R_7Zip_Present) }
+}
 
-$PolicyE = @{ name = $PolicyName; description = "Phase E"; schema_version = "1"; is_active = $true; document = @{ resources = @(
-    $R_Putty_Absent, $R_7Zip_Absent, $R_Fx_145) } }
-$PolicyF = @{ name = $PolicyName; description = "Phase F"; schema_version = "1"; is_active = $true; document = @{ resources = @(
-    $R_Putty_Absent, $R_7Zip_Absent, $R_Fx_Min146) } }
+$PolicyE = @{
+    name = $PolicyName; description = "Phase E"; schema_version = "1"; is_active = $true
+    document = @{ resources = @($R_Putty_Absent, $R_7Zip_Absent, $R_Fx_145) }
+}
+$PolicyF = @{
+    name = $PolicyName; description = "Phase F"; schema_version = "1"; is_active = $true
+    document = @{ resources = @($R_Putty_Absent, $R_7Zip_Absent, $R_Fx_Min146) }
+}
 
 $ExpectA = @(
-    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY";   installed = $true },
-    @{ stable_id = "7zip";  package_id = "7zip.7zip";     installed = $true }
+    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY"; installed = $true },
+    @{ stable_id = "7zip"; package_id = "7zip.7zip"; installed = $true }
 )
 $ExpectB = @(
-    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY";   installed = $false },
-    @{ stable_id = "7zip";  package_id = "7zip.7zip";     installed = $true }
+    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY"; installed = $false },
+    @{ stable_id = "7zip"; package_id = "7zip.7zip"; installed = $true }
 )
 $ExpectC = @(
-    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY";   installed = $false },
-    @{ stable_id = "7zip";  package_id = "7zip.7zip";     installed = $false }
+    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY"; installed = $false },
+    @{ stable_id = "7zip"; package_id = "7zip.7zip"; installed = $false }
 )
 $ExpectD = @(
-    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY";   installed = $true },
-    @{ stable_id = "7zip";  package_id = "7zip.7zip";     installed = $true }
+    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY"; installed = $true },
+    @{ stable_id = "7zip"; package_id = "7zip.7zip"; installed = $true }
 )
 $ExpectE = @(
-    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY";   installed = $false },
-    @{ stable_id = "7zip";  package_id = "7zip.7zip";     installed = $false },
+    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY"; installed = $false },
+    @{ stable_id = "7zip"; package_id = "7zip.7zip"; installed = $false },
     @{ stable_id = "firefox"; package_id = "Mozilla.Firefox"; installed = $true; exact = "145.0.2" }
 )
 $ExpectF = @(
-    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY";   installed = $false },
-    @{ stable_id = "7zip";  package_id = "7zip.7zip";     installed = $false },
+    @{ stable_id = "putty"; package_id = "PuTTY.PuTTY"; installed = $false },
+    @{ stable_id = "7zip"; package_id = "7zip.7zip"; installed = $false },
     @{ stable_id = "firefox"; package_id = "Mozilla.Firefox"; installed = $true; min = "146.0" }
 )
 
@@ -349,3 +442,4 @@ Run-Phase -PhaseLabel "Phase E" -Policy $PolicyE -Expect $ExpectE
 Run-Phase -PhaseLabel "Phase F" -Policy $PolicyF -Expect $ExpectF
 
 "`nDone. ✅" | Write-Host
+```

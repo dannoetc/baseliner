@@ -4,7 +4,9 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import desc, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+
+from baseliner_server.services.policy_compiler import compile_effective_policy
 
 from baseliner_server.api.deps import get_db, hash_token, require_admin
 from baseliner_server.db.models import (
@@ -22,6 +24,9 @@ from baseliner_server.schemas.admin import (
     AssignPolicyResponse,
     CreateEnrollTokenRequest,
     CreateEnrollTokenResponse,
+    DeviceAssignmentsResponse,
+    ClearAssignmentsResponse,
+    PolicyAssignmentOut,
 )
 from baseliner_server.schemas.admin_list import (
     DeviceSummary,
@@ -36,22 +41,9 @@ router = APIRouter(tags=["admin"])
 
 
 def utcnow() -> datetime:
-    # Always return tz-aware UTC datetime.
-    # Postgres returns tz-aware for timezone=True columns; keeping utcnow aware avoids
-    # offset-naive vs offset-aware subtraction errors.
-    return datetime.now(timezone.utc)
-
-
-def _as_utc(dt: datetime | None) -> datetime | None:
-    """
-    Normalize datetimes to tz-aware UTC for calculations.
-    Treat naive datetimes as UTC (common in sqlite/test contexts).
-    """
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    # Return a timezone-naive UTC datetime.
+    # (SQLite + tests are using naive datetimes, so keep it consistent.)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _status(v: Any) -> Optional[str]:
@@ -70,8 +62,7 @@ def create_enroll_token(payload: CreateEnrollTokenRequest, db: Session = Depends
     tok = EnrollToken(
         token_hash=hash_token(raw),
         created_at=utcnow(),
-        # Keep DB values consistent: store expires_at as UTC-aware when present.
-        expires_at=_as_utc(payload.expires_at),
+        expires_at=payload.expires_at,
         used_at=None,
         note=payload.note,
     )
@@ -118,6 +109,69 @@ def assign_policy(payload: AssignPolicyRequest, db: Session = Depends(get_db)) -
 
     db.commit()
     return AssignPolicyResponse(ok=True)
+
+
+@router.get(
+    "/admin/devices/{device_id}/assignments",
+    response_model=DeviceAssignmentsResponse,
+    dependencies=[Depends(require_admin)],
+)
+def list_device_assignments(
+    device_id: str = Path(..., description="Device UUID"),
+    db: Session = Depends(get_db),
+) -> DeviceAssignmentsResponse:
+    """Return the current policy assignments for a device (admin/debug helper)."""
+
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    assigns = (
+        db.query(PolicyAssignment)
+        .options(joinedload(PolicyAssignment.policy))
+        .filter(PolicyAssignment.device_id == device_id)
+        .order_by(desc(PolicyAssignment.priority))
+        .all()
+    )
+
+    out = []
+    for a in assigns:
+        pol = a.policy
+        out.append(
+            PolicyAssignmentOut(
+                policy_id=str(a.policy_id),
+                policy_name=(pol.name if pol else ""),
+                priority=int(a.priority),
+                mode=_status(a.mode) or "enforce",
+                is_active=bool(pol.is_active) if pol else False,
+            )
+        )
+
+    return DeviceAssignmentsResponse(device_id=device_id, assignments=out)
+
+
+@router.delete(
+    "/admin/devices/{device_id}/assignments",
+    response_model=ClearAssignmentsResponse,
+    dependencies=[Depends(require_admin)],
+)
+def clear_device_assignments(
+    device_id: str = Path(..., description="Device UUID"),
+    db: Session = Depends(get_db),
+) -> ClearAssignmentsResponse:
+    """Remove all policy assignments for a device (admin/debug helper)."""
+
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    removed = (
+        db.query(PolicyAssignment)
+        .filter(PolicyAssignment.device_id == device_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return ClearAssignmentsResponse(device_id=device_id, removed=int(removed or 0))
 
 
 @router.post(
@@ -235,7 +289,22 @@ def list_devices(
     )
 
     rows = db.execute(stmt).all()
-    now = utcnow()  # aware
+
+    # NOTE: sqlite/postgres datetime handling can yield a mix of naive + tz-aware
+    # datetimes depending on driver + column configuration. Always normalize to
+    # UTC-aware datetimes before subtracting, otherwise Python raises:
+    #   TypeError: can't subtract offset-naive and offset-aware datetimes
+    now = datetime.now(timezone.utc)
+
+    def _age_seconds(then: datetime | None) -> int | None:
+        if not then:
+            return None
+        t = then
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        else:
+            t = t.astimezone(timezone.utc)
+        return int((now - t).total_seconds())
 
     items_out: list[DeviceSummary] = []
     for row in rows:
@@ -263,11 +332,8 @@ def list_devices(
                 summary=(m.get("summary") or {}),
             )
 
-        seen_at = _as_utc(d.last_seen_at)
-        run_at = _as_utc(last_run_at)
-
-        seen_age_s = int((now - seen_at).total_seconds()) if seen_at else None
-        run_age_s = int((now - run_at).total_seconds()) if run_at else None
+        seen_age_s = _age_seconds(d.last_seen_at)
+        run_age_s = _age_seconds(last_run_at)
 
         offline = (seen_age_s is None) or (seen_age_s > int(offline_after_seconds))
         stale = (run_age_s is None) or (run_age_s > int(stale_after_seconds))
@@ -411,3 +477,80 @@ def get_run_detail(
             for l in logs
         ],
     )
+
+@router.get(
+    "/admin/devices/{device_id}/assignments",
+    response_model=DeviceAssignmentsResponse,
+    dependencies=[Depends(require_admin)],
+)
+def get_device_assignments(device_id: str, db: Session = Depends(get_db)) -> DeviceAssignmentsResponse:
+    """List policy assignments for a device (debug endpoint).
+
+    We intentionally return assignments *including inactive policies* so admins can see
+    why an expected policy isn't taking effect (e.g., policy disabled, priority order).
+    """
+    dev = db.get(Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    rows = (
+        db.query(PolicyAssignment, Policy)
+        .join(Policy, Policy.id == PolicyAssignment.policy_id)
+        .filter(PolicyAssignment.device_id == device_id)
+        .order_by(PolicyAssignment.priority.asc())
+        .all()
+    )
+
+    assignments: list[PolicyAssignmentOut] = []
+    for a, p in rows:
+        assignments.append(
+            PolicyAssignmentOut(
+                policy_id=str(p.id),
+                policy_name=p.name,
+                priority=int(a.priority),
+                mode=a.mode,
+                is_active=bool(p.is_active),
+            )
+        )
+
+    return DeviceAssignmentsResponse(device_id=device_id, assignments=assignments)
+
+
+@router.delete(
+    "/admin/devices/{device_id}/assignments",
+    response_model=ClearAssignmentsResponse,
+    dependencies=[Depends(require_admin)],
+)
+
+@router.post(
+    "/admin/compile",
+    dependencies=[Depends(require_admin)],
+)
+def compile_policy_for_device(device_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """
+    Debug endpoint: compile effective policy snapshot for a device.
+
+    Called like:
+      POST /api/v1/admin/compile?device_id=<uuid>
+    """
+    dev = db.get(Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    snap = compile_effective_policy(db, dev)
+    return {"device_id": str(dev.id), "mode": snap.mode, "policy": snap.policy, "meta": snap.meta}
+
+def clear_device_assignments(device_id: str, db: Session = Depends(get_db)) -> ClearAssignmentsResponse:
+    """Delete *all* policy assignments for a device (test helper)."""
+    dev = db.get(Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    removed = (
+        db.query(PolicyAssignment)
+        .filter(PolicyAssignment.device_id == device_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return ClearAssignmentsResponse(device_id=device_id, removed=int(removed or 0))
+
