@@ -113,6 +113,9 @@ def _normalize_run_status(payload_status: str | None, *, items_total: int, items
     We override ambiguous statuses (running/partial/etc) to keep invariants.
     """
     if items_total == 0:
+        status = (payload_status or "").strip().lower()
+        if status in ("fail", "failed", "error"):
+            return RunStatus.failed
         return RunStatus.succeeded
     return RunStatus.failed if items_failed > 0 else RunStatus.succeeded
 
