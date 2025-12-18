@@ -205,3 +205,51 @@ def test_health_warn_failed_run(client, db):
     assert d["health"]["status"] == "warn"
     assert d["health"]["offline"] is False
     assert (d["health"].get("reason") or "").lower().startswith("latest run failed")
+
+
+def test_last_run_and_health_present_without_flag(client, db):
+    """
+    last_run + basic health data should be returned even when include_health=false.
+    """
+
+    dev = _create_device(db, device_key="LITE1", last_seen_at=utcnow() - timedelta(seconds=120))
+    end = utcnow() - timedelta(seconds=60)
+    run = _create_run(
+        db,
+        device_id=dev.id,
+        started_at=end - timedelta(seconds=20),
+        ended_at=end,
+        status=RunStatus.succeeded,
+    )
+    db.commit()
+
+    r = _get_devices(
+        client,
+        "?include_health=false&stale_after_seconds=1800&offline_after_seconds=3600",
+    )
+    assert r.status_code == 200
+    d = _get_device(r.json(), "LITE1")
+
+    assert d["last_run"]["id"] == str(run.id)
+    assert d["health"]["status"] == "ok"
+    assert d["health"]["offline"] is False
+
+
+def test_health_without_runs_even_when_flag_disabled(client, db):
+    """
+    Devices without runs still report health metadata with the default flag.
+    """
+
+    _create_device(db, device_key="NORN", last_seen_at=utcnow() - timedelta(seconds=10))
+    db.commit()
+
+    r = _get_devices(
+        client,
+        "?include_health=false&stale_after_seconds=1800&offline_after_seconds=3600",
+    )
+    assert r.status_code == 200
+    d = _get_device(r.json(), "NORN")
+
+    assert d.get("last_run") is None
+    assert d["health"]["status"] == "warn"
+    assert d["health"]["stale"] is True
