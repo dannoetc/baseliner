@@ -630,7 +630,10 @@ def list_devices(
     offset: int = Query(0, ge=0),
     include_health: bool = Query(
         False,
-        description="If true, include last_run + computed health fields per device.",
+        description=(
+            "If true, include last_run + computed health fields per device."
+            " Basic last_run + health details are still included when false."
+        ),
     ),
     stale_after_seconds: int = Query(
         1800,
@@ -645,36 +648,6 @@ def list_devices(
         description="Mark device as 'offline' if last_seen_at is older than this many seconds.",
     ),
 ) -> DevicesListResponse:
-    if not include_health:
-        stmt = (
-            select(Device)
-            .order_by(desc(Device.last_seen_at), desc(Device.enrolled_at))
-            .offset(offset)
-            .limit(limit)
-        )
-        devices = list(db.scalars(stmt).all())
-
-        return DevicesListResponse(
-            items=[
-                DeviceSummary(
-                    id=str(d.id),
-                    device_key=d.device_key,
-                    hostname=d.hostname,
-                    os=d.os,
-                    os_version=d.os_version,
-                    arch=d.arch,
-                    agent_version=d.agent_version,
-                    enrolled_at=d.enrolled_at,
-                    last_seen_at=d.last_seen_at,
-                    tags=d.tags or {},
-                )
-                for d in devices
-            ],
-            limit=limit,
-            offset=offset,
-        )
-
-    # include_health=True
     from baseliner_server.schemas.admin_list import RunSummaryLite, DeviceHealth
 
     runs_ranked = (
@@ -745,25 +718,43 @@ def list_devices(
                 summary=(m.get("summary") or {}),
             )
 
-        seen_age_s = _age_seconds(d.last_seen_at)
-        run_age_s = _age_seconds(last_run_at)
+        health_obj: DeviceHealth | None = None
 
-        offline = (seen_age_s is None) or (seen_age_s > int(offline_after_seconds))
-        stale = (run_age_s is None) or (run_age_s > int(stale_after_seconds))
-        last_run_failed = bool(last_run_status and last_run_status.lower() != "succeeded")
+        # Provide basic health insight even when include_health=False so clients
+        # consistently receive last_run + health metadata.
+        if include_health or last_run_at is not None or d.last_seen_at is not None:
+            seen_age_s = _age_seconds(d.last_seen_at)
+            run_age_s = _age_seconds(last_run_at)
 
-        if offline:
-            health_status = "offline"
-            reason = "device has not checked in recently"
-        elif last_run_failed:
-            health_status = "warn"
-            reason = "latest run failed"
-        elif stale:
-            health_status = "warn"
-            reason = "stale"
-        else:
-            health_status = "ok"
-            reason = None
+            offline = (seen_age_s is None) or (seen_age_s > int(offline_after_seconds))
+            stale = (run_age_s is None) or (run_age_s > int(stale_after_seconds))
+            last_run_failed = bool(last_run_status and last_run_status.lower() != "succeeded")
+
+            if offline:
+                health_status = "offline"
+                reason = "device has not checked in recently"
+            elif last_run_failed:
+                health_status = "warn"
+                reason = "latest run failed"
+            elif stale:
+                health_status = "warn"
+                reason = "stale"
+            else:
+                health_status = "ok"
+                reason = None
+
+            health_obj = DeviceHealth(
+                status=health_status,
+                now=now,
+                last_seen_at=d.last_seen_at,
+                last_run_at=last_run_at,
+                last_run_status=last_run_status,
+                seen_age_seconds=seen_age_s,
+                run_age_seconds=run_age_s,
+                stale=bool(stale),
+                offline=bool(offline),
+                reason=reason,
+            )
 
         items_out.append(
             DeviceSummary(
@@ -778,18 +769,7 @@ def list_devices(
                 last_seen_at=d.last_seen_at,
                 tags=d.tags or {},
                 last_run=last_run_obj,
-                health=DeviceHealth(
-                    status=health_status,
-                    now=now,
-                    last_seen_at=d.last_seen_at,
-                    last_run_at=last_run_at,
-                    last_run_status=last_run_status,
-                    seen_age_seconds=seen_age_s,
-                    run_age_seconds=run_age_s,
-                    stale=bool(stale),
-                    offline=bool(offline),
-                    reason=reason,
-                ),
+                health=health_obj,
             )
         )
 
