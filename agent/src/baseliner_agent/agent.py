@@ -8,7 +8,7 @@ import uuid
 from typing import Any
 
 from .agent_health import write_health
-from .http_client import ApiClient
+from .http_client import ApiClient, LogFn
 from .local_logging import log_event, new_run_log_path, prune_run_logs
 from .reporting import (
     delete_queued,
@@ -30,6 +30,18 @@ def _device_facts() -> dict[str, Any]:
         "os_version": platform.version(),
         "arch": platform.machine(),
     }
+
+
+def _http_log_fn(run_log, local_run_id: str | None) -> LogFn | None:
+    if run_log is None:
+        return None
+
+    def _log(event: dict[str, Any]) -> None:
+        payload = {"ts": utcnow_iso(), "local_run_id": local_run_id, **event}
+        payload.setdefault("level", "info")
+        log_event(run_log, payload)
+
+    return _log
 
 
 def _offline_report(*, state: AgentState, started: str, ended: str, error: str) -> dict[str, Any]:
@@ -119,10 +131,11 @@ def enroll_device(server: str, enroll_token: str, device_key: str, tags: dict[st
     }
 
     resp = client.post_json("/api/v1/enroll", payload)
-    state.device_id = resp.get("device_id")
+    data = resp.data
+    state.device_id = data.get("device_id")
     state.device_key = device_key
 
-    device_token = resp.get("device_token")
+    device_token = data.get("device_token")
     if not device_token:
         raise RuntimeError("Enroll succeeded but device_token missing in response")
 
@@ -143,6 +156,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     local_run_id = str(uuid.uuid4())
     started = utcnow_iso()
     run_log = new_run_log_path(state_dir, started, local_run_id)
+    http_log = _http_log_fn(run_log, local_run_id)
 
     log_event(run_log, {
         "ts": started, "level": "info", "event": "run_start",
@@ -153,16 +167,19 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
     # Best-effort flush; if server is down, don't crash the run
     try:
-        _flush_queue(client, state, state_dir, run_log=run_log, local_run_id=local_run_id)
+        _flush_queue(client, state, state_dir, run_log=run_log, local_run_id=local_run_id, http_log_fn=http_log)
     except Exception as e:
         log_event(run_log, {
             "ts": utcnow_iso(), "level": "warning", "event": "queue_flush_failed",
             "local_run_id": local_run_id, "error": str(e),
         })
 
+    policy_request_id = None
     # Fetch effective policy (MUST NOT hard-crash the whole run)
     try:
-        pol = client.get_json("/api/v1/device/policy")
+        pol_resp = client.get_json("/api/v1/device/policy", log_fn=http_log)
+        pol = pol_resp.data
+        policy_request_id = pol_resp.request_id
     except Exception as e:
         ended = utcnow_iso()
         err = str(e)
@@ -229,6 +246,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "no_policy_assigned": bool(no_policy_assigned),
             "policy_id": pol.get("policy_id"),
             "policy_name": pol.get("policy_name"),
+            "request_id": policy_request_id,
         },
     )
 
@@ -383,8 +401,9 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
     # Post report (fallback to queue)
     try:
-        resp = client.post_json("/api/v1/device/reports", report, retries=1)
-        run_id = resp.get("run_id")
+        resp = client.post_json("/api/v1/device/reports", report, retries=1, log_fn=http_log)
+        run_id = resp.data.get("run_id")
+        report_request_id = resp.request_id
         print(f"[OK] Posted report run_id={run_id}")
 
         state.last_reported_policy_hash = effective_hash
@@ -398,7 +417,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "report_posted", "local_run_id": local_run_id, "server_run_id": run_id, "effective_policy_hash": effective_hash},
+            {"ts": utcnow_iso(), "level": "info", "event": "report_posted", "local_run_id": local_run_id, "server_run_id": run_id, "effective_policy_hash": effective_hash, "request_id": report_request_id},
         )
     except Exception as e:
         mf, mb = queue_limits()
@@ -431,7 +450,10 @@ def _flush_queue(
     *,
     run_log=None,
     local_run_id: str | None = None,
+    http_log_fn: LogFn | None = None,
 ) -> None:
+    http_log = http_log_fn or _http_log_fn(run_log, local_run_id)
+
     mf, mb = queue_limits()
     stats = prune_queue(state_dir, max_files=mf, max_bytes=mb)
     if stats.get("removed_files", 0) > 0:
@@ -458,7 +480,7 @@ def _flush_queue(
     for path in queued[:20]:
         try:
             report = json.loads(path.read_text(encoding="utf-8-sig"))
-            client.post_json("/api/v1/device/reports", report, retries=1)
+            client.post_json("/api/v1/device/reports", report, retries=1, log_fn=http_log)
             delete_queued(path)
             flushed += 1
             print(f"[OK] Flushed queued report: {path.name}")

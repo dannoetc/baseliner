@@ -83,7 +83,7 @@ def _latest_run_log(state_dir: str | Path) -> dict[str, Any]:
     if not runs_dir.exists():
         return {"latest_path": None, "latest_mtime": None}
 
-    candidates = [p for p in runs_dir.glob("*.log") if p.is_file()]
+    candidates = [p for p in runs_dir.glob("*.jsonl") if p.is_file()]
     if not candidates:
         return {"latest_path": None, "latest_mtime": None}
 
