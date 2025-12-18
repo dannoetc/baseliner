@@ -252,8 +252,10 @@ class RunItem(Base):
     run: Mapped["Run"] = relationship(back_populates="items")
     logs: Mapped[list["LogEvent"]] = relationship(back_populates="run_item", cascade="all, delete-orphan")
 
+    
     __table_args__ = (
         Index("ix_run_items_run_id", "run_id"),
+        Index("ix_run_items_run_id_ordinal", "run_id", "ordinal"),
         Index("ix_run_items_resource_type_id", "resource_type", "resource_id"),
     )
 

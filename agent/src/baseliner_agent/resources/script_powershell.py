@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 from baseliner_agent.engine import ItemResult
-from baseliner_agent.powershell import run_ps
+from baseliner_agent.powershell import run_ps, run_ps_file
 from baseliner_agent.reporting import truncate, utcnow_iso
 
 
@@ -59,6 +59,14 @@ def _pick_script(res: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _pick_path(res: dict[str, Any], *keys: str) -> str:
+    for k in keys:
+        v = res.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
 def _script_source(res: dict[str, Any], *, detect: bool) -> str | None:
     if detect:
         for k in ("detect", "script", "check", "test"):
@@ -81,8 +89,21 @@ class PowerShellScriptHandler:
         rid = str(res.get("id") or "").strip() or "powershell"
         name = (res.get("name") or rid)
 
+        # Detect can be inline script or a script path.
         detect_script = _pick_script(res, "detect", "script", "check", "test")
+        detect_path = _pick_path(res, "detect_path", "detectPath", "path")
+
+        # Remediate can be inline script or a script path.
         remediate_script = _pick_script(res, "remediate", "remediation", "fix", "remediate_script")
+        remediate_path = _pick_path(
+            res,
+            "remediate_path",
+            "remediatePath",
+            "remediation_path",
+            "remediationPath",
+            "fix_path",
+            "fixPath",
+        )
 
         detect_src = _script_source(res, detect=True)
         remediate_src = _script_source(res, detect=False)
@@ -94,7 +115,7 @@ class PowerShellScriptHandler:
         detect_timeout_s = min(120, remediate_timeout_s)
         validate_timeout_s = detect_timeout_s
 
-        if not detect_script:
+        if not detect_script and not detect_path:
             item = {
                 "resource_type": self.resource_type,
                 "resource_id": rid,
@@ -110,13 +131,13 @@ class PowerShellScriptHandler:
                 "started_at": started_at,
                 "ended_at": utcnow_iso(),
                 "evidence": {"meta": {"detect_source": detect_src, "remediate_source": remediate_src}},
-                "error": {"type": "invalid_resource", "message": "script.powershell missing detect/script"},
+                "error": {"type": "invalid_resource", "message": "script.powershell missing detect/script or path"},
             }
             logs.append(
                 {
                     "ts": utcnow_iso(),
                     "level": "error",
-                    "message": "script.powershell missing detect/script",
+                    "message": "script.powershell missing detect/script or path",
                     "data": {"id": rid},
                     "run_item_ordinal": ordinal,
                 }
@@ -124,13 +145,19 @@ class PowerShellScriptHandler:
             return ItemResult(item=item, logs=logs, success=False)
 
         # DETECT
-        det = run_ps(detect_script, timeout_s=detect_timeout_s)
+        if detect_script:
+            det = run_ps(detect_script, timeout_s=detect_timeout_s)
+            detect_kind = "inline"
+        else:
+            det = run_ps_file(detect_path, timeout_s=detect_timeout_s)
+            detect_kind = "file"
         compliant_before = det.exit_code == 0
 
         evidence: dict[str, Any] = {
             "meta": {
                 "detect_source": detect_src,
                 "remediate_source": remediate_src,
+                "detect_kind": detect_kind,
                 "timeouts": {
                     "detect_seconds": detect_timeout_s,
                     "remediate_seconds": remediate_timeout_s,
@@ -183,17 +210,23 @@ class PowerShellScriptHandler:
 
         # REMEDIATE
         if not compliant_before and mode != "audit":
-            if not remediate_script:
+            if not remediate_script and not remediate_path:
                 success = False
-                error = {"type": "no_remediate", "message": "Noncompliant but no remediate script provided"}
+                error = {"type": "no_remediate", "message": "Noncompliant but no remediate script/path provided"}
             else:
-                rem = run_ps(remediate_script, timeout_s=remediate_timeout_s)
+                if remediate_script:
+                    rem = run_ps(remediate_script, timeout_s=remediate_timeout_s)
+                    remediate_kind = "inline"
+                else:
+                    rem = run_ps_file(remediate_path, timeout_s=remediate_timeout_s)
+                    remediate_kind = "file"
                 status_remediate = "ok" if rem.exit_code == 0 else "fail"
                 evidence["remediate"] = {
                     "engine": rem.engine,
                     "exit_code": rem.exit_code,
                     "stdout": truncate(rem.stdout),
                     "stderr": truncate(rem.stderr),
+                    "kind": remediate_kind,
                 }
                 changed = rem.exit_code == 0
 
@@ -202,10 +235,17 @@ class PowerShellScriptHandler:
                     error = {"type": "timeout", "message": f"Remediate timed out after {remediate_timeout_s}s"}
                 elif rem.exit_code != 0:
                     success = False
-                    error = {"type": "remediate_failed", "message": "Remediate script failed", "exit_code": rem.exit_code}
+                    error = {
+                        "type": "remediate_failed",
+                        "message": "Remediate script failed",
+                        "exit_code": rem.exit_code,
+                    }
 
         # VALIDATE (re-run detect)
-        val = run_ps(detect_script, timeout_s=validate_timeout_s)
+        if detect_script:
+            val = run_ps(detect_script, timeout_s=validate_timeout_s)
+        else:
+            val = run_ps_file(detect_path, timeout_s=validate_timeout_s)
         compliant_after = val.exit_code == 0
         status_validate = "ok" if val.exit_code == 0 else "fail"
         evidence["validate"] = {

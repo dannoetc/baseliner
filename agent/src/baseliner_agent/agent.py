@@ -1,33 +1,24 @@
-import platform
-import socket
-from typing import Any
+from __future__ import annotations
+
 import hashlib
 import json
-import os
+import platform
+import socket
 import uuid
+from typing import Any
 
+from .agent_health import write_health
 from .http_client import ApiClient
+from .local_logging import log_event, new_run_log_path, prune_run_logs
 from .reporting import (
-    utcnow_iso,
-    truncate,
-    queue_report,
-    iter_queued_reports,
     delete_queued,
+    iter_queued_reports,
     prune_queue,
     queue_limits,
+    queue_report,
+    utcnow_iso,
 )
-from .local_logging import prune_run_logs, new_run_log_path, log_event
-from .agent_health import write_health
 from .state import AgentState
-from .powershell import run_ps
-from .winget import (
-    list_package,
-    install_package,
-    upgrade_package,
-    installed_from_list_output,
-    parse_version_from_list_output,
-)
-
 from .engine import PolicyEngine
 from .resources import default_handlers
 
@@ -42,10 +33,6 @@ def _device_facts() -> dict[str, Any]:
 
 
 def _canonical_policy_hash(pol: dict[str, Any]) -> str:
-    """
-    Fallback hash when server returns effective_policy_hash = null.
-    Hash a stable subset of the policy response.
-    """
     payload = {
         "policy_id": pol.get("policy_id"),
         "policy_name": pol.get("policy_name"),
@@ -53,18 +40,15 @@ def _canonical_policy_hash(pol: dict[str, Any]) -> str:
         "mode": pol.get("mode"),
         "document": pol.get("document") or {},
         "sources": pol.get("sources") or [],
+        "compile": pol.get("compile") or {},
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _compute_observed_state_hash(items: list[dict[str, Any]]) -> str:
-    """Compute a stable hash of the locally-observed state.
-
-    This intentionally avoids hashing raw stdout/stderr (often noisy). Instead we
-    hash a small, stable fingerprint per resource.
-    """
     fps: list[dict[str, Any]] = []
+
     for it in items:
         rtype = it.get("resource_type")
         rid = it.get("resource_id")
@@ -74,10 +58,11 @@ def _compute_observed_state_hash(items: list[dict[str, Any]]) -> str:
             "resource_type": rtype,
             "resource_id": rid,
             "compliant_after": it.get("compliant_after"),
+            "changed": bool(it.get("changed")),
         }
 
-        detect = (ev.get("detect") or {})
-        validate = (ev.get("validate") or {})
+        detect = (ev.get("detect") or {}) if isinstance(ev, dict) else {}
+        validate = (ev.get("validate") or {}) if isinstance(ev, dict) else {}
 
         if rtype == "winget.package":
             fp["installed"] = validate.get("installed", detect.get("installed"))
@@ -109,6 +94,7 @@ def enroll_device(server: str, enroll_token: str, device_key: str, tags: dict[st
     resp = client.post_json("/api/v1/enroll", payload)
     state.device_id = resp.get("device_id")
     state.device_key = device_key
+
     device_token = resp.get("device_token")
     if not device_token:
         raise RuntimeError("Enroll succeeded but device_token missing in response")
@@ -119,11 +105,11 @@ def enroll_device(server: str, enroll_token: str, device_key: str, tags: dict[st
 
 
 def run_once(server: str, state_dir: str, force: bool = False) -> None:
-    # Keep local run logs bounded
     prune_run_logs(state_dir)
 
     state = AgentState.load(state_dir)
     state.last_server_url = server
+
     token = state.load_device_token(state_dir)
     client = ApiClient(server, device_token=token)
 
@@ -146,14 +132,24 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         },
     )
 
+    # Flush queued reports from prior failures (best-effort)
     _flush_queue(client, state, state_dir, run_log=run_log, local_run_id=local_run_id)
 
+    # Fetch effective policy
     pol = client.get_json("/api/v1/device/policy")
     server_hash = pol.get("effective_policy_hash")
     effective_hash = server_hash or _canonical_policy_hash(pol)
-    mode = pol.get("mode", "enforce")
+
+    mode = pol.get("mode", "enforce") or "enforce"
     doc = pol.get("document") or {}
     resources = doc.get("resources") or []
+
+    no_policy_assigned = (
+        len(resources) == 0
+        and not pol.get("policy_name")
+        and not pol.get("policy_id")
+        and not (pol.get("sources") or [])
+    )
 
     log_event(
         run_log,
@@ -165,14 +161,36 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "mode": mode,
             "effective_policy_hash": effective_hash,
             "resources_count": len(resources),
+            "no_policy_assigned": bool(no_policy_assigned),
             "policy_id": pol.get("policy_id"),
             "policy_name": pol.get("policy_name"),
         },
     )
 
-    logs: list[dict[str, Any]] = []
-    logs.append({"level": "info", "message": "Run started", "data": {"mode": mode, "resources": len(resources)}})
+    logs: list[dict[str, Any]] = [
+        {
+            "level": "info",
+            "message": "Run started",
+            "data": {
+                "mode": mode,
+                "resources": len(resources),
+                "no_policy_assigned": bool(no_policy_assigned),
+            },
+        }
+    ]
 
+    if no_policy_assigned:
+        log_event(
+            run_log,
+            {
+                "ts": utcnow_iso(),
+                "level": "info",
+                "event": "no_policy_assigned",
+                "local_run_id": local_run_id,
+            },
+        )
+
+    # Execute resources via engine/handlers
     engine = PolicyEngine(default_handlers())
     eng = engine.run(resources, mode=mode)
 
@@ -180,6 +198,10 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     logs.extend(eng.logs)
     ok = eng.ok
     failed = eng.failed
+
+    items_changed = sum(1 for it in items if bool(it.get("changed")))
+    items_failed = int(failed)
+    items_total = len(items)
 
     for ir in eng.results:
         item = ir.item
@@ -206,10 +228,31 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         )
 
     ended = utcnow_iso()
-    status = "succeeded" if failed == 0 else "failed"
-    logs.append({"ts": utcnow_iso(), "level": "info", "message": "Run finished", "data": {"ok": ok, "failed": failed, "status": status}})
+    status = "succeeded" if items_failed == 0 else "failed"
+
+    logs.append(
+        {
+            "ts": utcnow_iso(),
+            "level": "info",
+            "message": "Run finished",
+            "data": {"ok": ok, "failed": items_failed, "status": status},
+        }
+    )
 
     observed_state_hash = _compute_observed_state_hash(items)
+
+    # Use snake_case for server + ui; keep a couple legacy keys too.
+    summary: dict[str, Any] = {
+        "items_total": items_total,
+        "items_failed": items_failed,
+        "items_changed": items_changed,
+        "ok": ok,
+        "failed": items_failed,     # legacy
+        "itemsTotal": items_total,  # legacy
+        "observed_state_hash": observed_state_hash,
+    }
+    if no_policy_assigned:
+        summary.setdefault("reason", "no_policy_assigned")
 
     log_event(
         run_log,
@@ -220,9 +263,11 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "local_run_id": local_run_id,
             "status": status,
             "ok": ok,
-            "failed": failed,
-            "items_total": len(items),
+            "items_total": items_total,
+            "items_failed": items_failed,
+            "items_changed": items_changed,
             "observed_state_hash": observed_state_hash,
+            "reason": summary.get("reason"),
         },
     )
 
@@ -237,12 +282,12 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "policy_name": pol.get("policy_name"),
             "effective_policy_hash": effective_hash,
         },
-        "summary": {"itemsTotal": len(items), "ok": ok, "failed": failed, "observed_state_hash": observed_state_hash},
+        "summary": summary,
         "items": items,
         "logs": logs,
     }
 
-    # Update local state as soon as we finish a run, regardless of reporting success.
+    # Update local state regardless of report POST success
     state.last_run_at = ended
     state.last_applied_policy_hash = effective_hash
     state.last_observed_state_hash = observed_state_hash
@@ -258,7 +303,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
     state.save(state_dir)
 
-    # Always write health.json at end of run (even if reporting fails)
+    # Always write health.json
     try:
         hp = write_health(state_dir, state=state)
         log_event(
@@ -271,6 +316,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             {"ts": utcnow_iso(), "level": "warning", "event": "health_write_failed", "local_run_id": local_run_id, "error": str(e)},
         )
 
+    # Post report (fallback to queue)
     try:
         resp = client.post_json("/api/v1/device/reports", report, retries=1)
         run_id = resp.get("run_id")
@@ -280,7 +326,6 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         state.last_http_ok_at = utcnow_iso()
         state.save(state_dir)
 
-        # refresh health after successful POST
         try:
             write_health(state_dir, state=state)
         except Exception:
@@ -288,17 +333,9 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
         log_event(
             run_log,
-            {
-                "ts": utcnow_iso(),
-                "level": "info",
-                "event": "report_posted",
-                "local_run_id": local_run_id,
-                "server_run_id": run_id,
-                "effective_policy_hash": effective_hash,
-            },
+            {"ts": utcnow_iso(), "level": "info", "event": "report_posted", "local_run_id": local_run_id, "server_run_id": run_id, "effective_policy_hash": effective_hash},
         )
     except Exception as e:
-        # Bound the queue before and after adding a new report.
         mf, mb = queue_limits()
         stats1 = prune_queue(state_dir, max_files=mf, max_bytes=mb)
         if stats1.get("removed_files", 0) > 0:
@@ -309,46 +346,35 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
         log_event(
             run_log,
-            {
-                "ts": utcnow_iso(),
-                "level": "warning",
-                "event": "report_queued",
-                "local_run_id": local_run_id,
-                "error": str(e),
-                "queued_path": str(path),
-                "effective_policy_hash": effective_hash,
-            },
+            {"ts": utcnow_iso(), "level": "warning", "event": "report_queued", "local_run_id": local_run_id, "error": str(e), "queued_path": str(path), "effective_policy_hash": effective_hash},
         )
 
         stats2 = prune_queue(state_dir, max_files=mf, max_bytes=mb)
         if stats2.get("removed_files", 0) > 0:
             print(f"[WARN] Pruned queued reports after enqueue: removed_files={stats2['removed_files']} removed_bytes={stats2['removed_bytes']}")
 
-        # refresh health after enqueue attempt
         try:
             write_health(state_dir, state=state)
         except Exception:
             pass
 
 
-def _flush_queue(client: ApiClient, state: AgentState, state_dir: str, *, run_log=None, local_run_id: str | None = None) -> None:
-    # Always bound the queue first (oldest-first deletion).
+def _flush_queue(
+    client: ApiClient,
+    state: AgentState,
+    state_dir: str,
+    *,
+    run_log=None,
+    local_run_id: str | None = None,
+) -> None:
     mf, mb = queue_limits()
     stats = prune_queue(state_dir, max_files=mf, max_bytes=mb)
     if stats.get("removed_files", 0) > 0:
         print(f"[WARN] Pruned queued reports: removed_files={stats['removed_files']} removed_bytes={stats['removed_bytes']}")
-
         if run_log is not None:
             log_event(
                 run_log,
-                {
-                    "ts": utcnow_iso(),
-                    "level": "warning",
-                    "event": "queue_pruned",
-                    "local_run_id": local_run_id,
-                    "removed_files": stats.get("removed_files"),
-                    "removed_bytes": stats.get("removed_bytes"),
-                },
+                {"ts": utcnow_iso(), "level": "warning", "event": "queue_pruned", "local_run_id": local_run_id, "removed_files": stats.get("removed_files"), "removed_bytes": stats.get("removed_bytes")},
             )
 
     queued = iter_queued_reports(state_dir)
@@ -358,17 +384,12 @@ def _flush_queue(client: ApiClient, state: AgentState, state_dir: str, *, run_lo
     if run_log is not None:
         log_event(
             run_log,
-            {
-                "ts": utcnow_iso(),
-                "level": "info",
-                "event": "queue_flush_start",
-                "local_run_id": local_run_id,
-                "queued_count": len(queued),
-            },
+            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_start", "local_run_id": local_run_id, "queued_count": len(queued)},
         )
 
     changed = False
     flushed = 0
+
     for path in queued[:20]:
         try:
             report = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -386,27 +407,14 @@ def _flush_queue(client: ApiClient, state: AgentState, state_dir: str, *, run_lo
             if run_log is not None:
                 log_event(
                     run_log,
-                    {
-                        "ts": utcnow_iso(),
-                        "level": "warning",
-                        "event": "queue_flush_error",
-                        "local_run_id": local_run_id,
-                        "error": str(e),
-                        "stopped_after_flushed": flushed,
-                    },
+                    {"ts": utcnow_iso(), "level": "warning", "event": "queue_flush_error", "local_run_id": local_run_id, "error": str(e), "stopped_after_flushed": flushed},
                 )
             break
 
     if run_log is not None:
         log_event(
             run_log,
-            {
-                "ts": utcnow_iso(),
-                "level": "info",
-                "event": "queue_flush_end",
-                "local_run_id": local_run_id,
-                "flushed": flushed,
-            },
+            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_end", "local_run_id": local_run_id, "flushed": flushed},
         )
 
     if changed:
@@ -415,252 +423,3 @@ def _flush_queue(client: ApiClient, state: AgentState, state_dir: str, *, run_lo
             write_health(state_dir, state=state)
         except Exception:
             pass
-
-
-def _run_script_powershell(res: dict[str, Any], ordinal: int, mode: str) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
-    rid = str(res.get("id"))
-    name = res.get("name") or rid
-    detect_script = (res.get("detect") or "").strip()
-    remediate_script = (res.get("remediate") or "").strip()
-
-    logs: list[dict[str, Any]] = []
-    started_at = utcnow_iso()
-
-    if not detect_script:
-        item = {
-            "resource_type": "script.powershell",
-            "resource_id": rid,
-            "name": name,
-            "ordinal": ordinal,
-            "compliant_before": None,
-            "compliant_after": None,
-            "changed": False,
-            "reboot_required": False,
-            "status_detect": "failed",
-            "status_remediate": "skipped",
-            "status_validate": "skipped",
-            "started_at": started_at,
-            "ended_at": utcnow_iso(),
-            "evidence": {},
-            "error": {"type": "invalid_resource", "message": "script.powershell missing detect"},
-        }
-        logs.append({"ts": utcnow_iso(), "level": "error", "message": "script.powershell missing detect", "data": {"id": rid}, "run_item_ordinal": ordinal})
-        return item, logs, False
-
-    # DETECT
-    det = run_ps(detect_script, timeout_s=120)
-    compliant_before = (det.exit_code == 0)
-    evidence: dict[str, Any] = {
-        "detect": {
-            "engine": det.engine,
-            "exit_code": det.exit_code,
-            "stdout": truncate(det.stdout),
-            "stderr": truncate(det.stderr),
-        }
-    }
-    status_detect = "ok" if det.exit_code == 0 else "fail"
-
-    status_remediate = "skipped"
-    status_validate = "skipped"
-    changed = False
-    error: dict[str, Any] = {}
-    success = True
-
-    # REMEDIATE (only if noncompliant and enforce)
-    if not compliant_before and mode != "audit":
-        if not remediate_script:
-            success = False
-            error = {"type": "no_remediate", "message": "Noncompliant but no remediate script provided"}
-            logs.append({"ts": utcnow_iso(), "level": "error", "message": "Noncompliant but no remediate script provided", "data": {"id": rid}, "run_item_ordinal": ordinal})
-        else:
-            rem = run_ps(remediate_script, timeout_s=300)
-            status_remediate = "ok" if rem.exit_code == 0 else "fail"
-            evidence["remediate"] = {
-                "engine": rem.engine,
-                "exit_code": rem.exit_code,
-                "stdout": truncate(rem.stdout),
-                "stderr": truncate(rem.stderr),
-            }
-            changed = (rem.exit_code == 0)
-
-            if rem.exit_code != 0:
-                success = False
-                error = {"type": "remediate_failed", "message": "Remediate script failed", "exit_code": rem.exit_code}
-
-    # VALIDATE (re-run detect)
-    val = run_ps(detect_script, timeout_s=120)
-    compliant_after = (val.exit_code == 0)
-    status_validate = "ok" if val.exit_code == 0 else "fail"
-    evidence["validate"] = {
-        "engine": val.engine,
-        "exit_code": val.exit_code,
-        "stdout": truncate(val.stdout),
-        "stderr": truncate(val.stderr),
-    }
-
-    if not compliant_after:
-        success = False
-        error = error or {"type": "still_noncompliant", "message": "Detect still failing after remediation"}
-
-    ended_at = utcnow_iso()
-
-    item = {
-        "resource_type": "script.powershell",
-        "resource_id": rid,
-        "name": name,
-        "ordinal": ordinal,
-        "compliant_before": compliant_before,
-        "compliant_after": compliant_after,
-        "changed": changed,
-        "reboot_required": False,
-        "status_detect": status_detect,
-        "status_remediate": status_remediate,
-        "status_validate": status_validate,
-        "started_at": started_at,
-        "ended_at": ended_at,
-        "evidence": evidence,
-        "error": error,
-    }
-
-    logs.append({"ts": utcnow_iso(), "level": "info" if success else "error", "message": "script.powershell processed", "data": {"id": rid, "success": success, "changed": changed}, "run_item_ordinal": ordinal})
-    return item, logs, success
-
-
-def _run_winget_package(res: dict[str, Any], ordinal: int, mode: str) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
-    package_id = str(res.get("id"))
-    ensure = (res.get("ensure") or "present").lower()
-    allow_upgrade = bool(res.get("allowUpgrade") or res.get("allow_upgrade") or False)
-    min_version = res.get("minVersion") or res.get("min_version")
-
-    logs: list[dict[str, Any]] = []
-    started_at = utcnow_iso()
-
-    detect = list_package(package_id)
-
-    installed = installed_from_list_output(detect.stdout, package_id) and detect.exit_code == 0
-    installed_ver = parse_version_from_list_output(detect.stdout, package_id)
-
-    compliant_before = installed if ensure == "present" else (not installed)
-
-    evidence = {
-        "detect": {
-            "exit_code": detect.exit_code,
-            "stdout": truncate(detect.stdout),
-            "stderr": truncate(detect.stderr),
-            "installed": installed,
-            "version": installed_ver,
-        }
-    }
-
-    status_detect = "ok" if detect.exit_code == 0 else "fail"
-    status_remediate = "skipped"
-    status_validate = "skipped"
-    changed = False
-    reboot_required = False
-    error: dict[str, Any] = {}
-
-    # If winget couldn't even run (common under SYSTEM), stop here but report it.
-    if detect.exit_code != 0 and (detect.stderr or "").strip():
-        err_text = detect.stderr.strip()
-        error = {
-            "type": "winget_unavailable",
-            "message": "winget failed to execute (often happens under SYSTEM/session 0)",
-            "detail": truncate(err_text),
-            "exit_code": detect.exit_code,
-        }
-        ended_at = utcnow_iso()
-        item = {
-            "resource_type": "winget.package",
-            "resource_id": package_id,
-            "name": res.get("name") or package_id,
-            "ordinal": ordinal,
-            "compliant_before": compliant_before,
-            "compliant_after": None,
-            "changed": False,
-            "reboot_required": reboot_required,
-            "status_detect": status_detect,
-            "status_remediate": status_remediate,
-            "status_validate": status_validate,
-            "started_at": started_at,
-            "ended_at": ended_at,
-            "evidence": evidence,
-            "error": error,
-        }
-        logs.append(
-            {
-                "ts": utcnow_iso(),
-                "level": "error",
-                "message": "winget.package detect failed",
-                "data": {"id": package_id, "stderr": truncate(err_text), "exit_code": detect.exit_code},
-                "run_item_ordinal": ordinal,
-            }
-        )
-        return item, logs, False
-
-    def need_remediate() -> bool:
-        if ensure != "present":
-            return False
-        if not installed:
-            return True
-        if allow_upgrade and min_version and installed_ver:
-            return str(installed_ver) < str(min_version)  # MVP compare
-        return False
-
-    success = True
-
-    if mode == "audit":
-        logs.append({"ts": utcnow_iso(), "level": "info", "message": "Audit mode; skipping remediation", "data": {"id": package_id}, "run_item_ordinal": ordinal})
-        status_remediate = "skipped"
-    else:
-        if need_remediate():
-            if not installed:
-                rem = install_package(package_id)
-                action = "install"
-            else:
-                rem = upgrade_package(package_id)
-                action = "upgrade"
-
-            status_remediate = "ok" if rem.exit_code == 0 else "fail"
-            evidence["remediate"] = {"action": action, "exit_code": rem.exit_code, "stdout": truncate(rem.stdout), "stderr": truncate(rem.stderr)}
-            changed = rem.exit_code == 0
-
-            if rem.exit_code != 0:
-                success = False
-                error = {"type": "winget_failed", "message": f"winget {action} failed", "exit_code": rem.exit_code, "detail": truncate(rem.stderr)}
-        else:
-            status_remediate = "skipped"
-
-    val = list_package(package_id)
-    installed_after = installed_from_list_output(val.stdout, package_id) and val.exit_code == 0
-    ver_after = parse_version_from_list_output(val.stdout, package_id)
-
-    compliant_after = installed_after if ensure == "present" else (not installed_after)
-    status_validate = "ok" if val.exit_code == 0 else "fail"
-    evidence["validate"] = {"exit_code": val.exit_code, "stdout": truncate(val.stdout), "stderr": truncate(val.stderr), "installed": installed_after, "version": ver_after}
-
-    if ensure == "present" and not installed_after:
-        success = False
-        error = error or {"type": "not_installed_after", "message": "Package still not installed after remediation"}
-
-    ended_at = utcnow_iso()
-
-    item = {
-        "resource_type": "winget.package",
-        "resource_id": package_id,
-        "name": res.get("name") or package_id,
-        "ordinal": ordinal,
-        "compliant_before": compliant_before,
-        "compliant_after": compliant_after,
-        "changed": changed,
-        "reboot_required": reboot_required,
-        "status_detect": status_detect,
-        "status_remediate": status_remediate,
-        "status_validate": status_validate,
-        "started_at": started_at,
-        "ended_at": ended_at,
-        "evidence": evidence,
-        "error": error,
-    }
-
-    logs.append({"ts": utcnow_iso(), "level": "info" if success else "error", "message": "winget.package processed", "data": {"id": package_id, "success": success, "changed": changed}, "run_item_ordinal": ordinal})
-    return item, logs, success

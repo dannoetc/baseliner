@@ -34,6 +34,12 @@ class RunDebugSummary(BaseModel):
     # Convenience link (relative path) to fetch full run detail
     detail_path: str | None = None
 
+    # Operator QoL (so you don't have to open run detail for common questions)
+    items_total: int | None = None
+    items_failed: int | None = None
+    items_changed: int | None = None
+    duration_ms: int | None = None
+
 
 class DeviceDebugResponse(BaseModel):
     device: DeviceSummary

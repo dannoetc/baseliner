@@ -1,5 +1,14 @@
-# agent/src/baseliner_agent/powershell.py
+"""PowerShell execution helpers for the Windows agent.
+
+MVP constraints:
+  - always non-interactive
+  - bounded execution (timeouts)
+  - best-effort process tree termination on timeout
+  - return 124 on timeout (matches curl/wget convention)
+"""
+
 import base64
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -95,4 +104,37 @@ def run_ps(script: str, timeout_s: int = 300) -> PowerShellResult:
     ]
 
     code, out, err = _run(args, timeout_s=timeout_s)
+    return PowerShellResult(exit_code=code, stdout=out, stderr=err, engine=engine)
+
+
+def run_ps_file(path: str, *, timeout_s: int = 300, args: Sequence[str] | None = None) -> PowerShellResult:
+    """Run a PowerShell script file via -File.
+
+    Returns:
+      - exit_code from the script
+      - 124 on timeout
+      - 127 if the path doesn't exist
+    """
+    p = (path or "").strip().strip('"')
+    if not p:
+        return PowerShellResult(exit_code=127, stdout="", stderr="empty path", engine="powershell")
+
+    if not os.path.exists(p):
+        return PowerShellResult(exit_code=127, stdout="", stderr=f"file not found: {p}", engine="powershell")
+
+    engine = pick_powershell()
+
+    argv = [
+        engine,
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        p,
+    ]
+    if args:
+        argv.extend([str(a) for a in args])
+
+    code, out, err = _run(argv, timeout_s=timeout_s)
     return PowerShellResult(exit_code=code, stdout=out, stderr=err, engine=engine)

@@ -4,6 +4,8 @@ venv/
 env/
 ENV/
 server/.venv/**
+agent/.venv/**
+agent/venv-build/**
 **/.venv/
 **/venv/
 **/env/
@@ -20,6 +22,7 @@ __pycache__/
 
 build/
 dist/
+agent/dist/**
 *.egg-info/
 .eggs/
 
@@ -40,3 +43,6 @@ Thumbs.db
 
 # --- Logs ---
 *.lo*
+
+# --- Misc --- 
+agent/out/**

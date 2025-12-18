@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -7,6 +7,10 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from baseliner_server.services.policy_compiler import compile_effective_policy
+from baseliner_server.core.policy_validation import PolicyDocValidationError, validate_and_normalize_document
+from baseliner_server.schemas.device_runs import DeviceRunsResponse, RunRollup
+from baseliner_server.schemas.maintenance import PruneRequest, PruneResponse, PruneCounts
+from baseliner_server.core.policy_validation import PolicyDocValidationError, validate_and_normalize_document
 
 from baseliner_server.api.deps import get_db, hash_token, require_admin
 from baseliner_server.db.models import (
@@ -54,6 +58,31 @@ def _status(v: Any) -> Optional[str]:
     if v is None:
         return None
     return v.value if hasattr(v, "value") else str(v)
+
+
+def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
+    """Pull an int from a run.summary dict using the first matching key."""
+    if not isinstance(summary, dict):
+        return None
+
+    for k in keys:
+        if k not in summary:
+            continue
+        v = summary.get(k)
+        if v is None:
+            continue
+        try:
+            # handles int/float/"123"
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                return int(v)
+            if isinstance(v, str) and v.strip():
+                return int(float(v.strip()))
+        except Exception:
+            continue
+
+    return None
 
 
 @router.post(
@@ -256,6 +285,130 @@ def debug_device_bundle(
     last_run_summary: RunDebugSummary | None = None
     last_items_out: list[RunItemDetail] = []
     if last_run:
+        items = list(
+            db.scalars(
+                select(RunItem)
+                .where(RunItem.run_id == last_run.id)
+                .order_by(RunItem.ordinal.asc())
+            ).all()
+        )
+
+        last_items_out = [
+            RunItemDetail(
+                id=str(i.id),
+                ordinal=i.ordinal,
+                resource_type=i.resource_type,
+                resource_id=i.resource_id,
+                name=i.name,
+                compliant_before=i.compliant_before,
+                compliant_after=i.compliant_after,
+                changed=i.changed,
+                reboot_required=i.reboot_required,
+                status_detect=_status(i.status_detect) or "unknown",
+                status_remediate=_status(i.status_remediate) or "unknown",
+                status_validate=_status(i.status_validate) or "unknown",
+                started_at=i.started_at,
+                ended_at=i.ended_at,
+                evidence=i.evidence or {},
+                error=i.error or {},
+            )
+            for i in items
+        ]
+
+        # QoL: quick counts + duration (so operators don't have to open run detail)
+        def _is_failed(it: RunItemDetail) -> bool:
+            err = it.error or {}
+            if isinstance(err, dict) and err.get("type"):
+                return True
+            for s in (it.status_detect, it.status_remediate, it.status_validate):
+                if (s or "").lower() in ("fail", "failed"):
+                    return True
+            return False
+
+        items_total = len(last_items_out)
+        items_failed = sum(1 for it in last_items_out if _is_failed(it))
+        items_changed = sum(1 for it in last_items_out if bool(it.changed))
+
+        duration_ms: int | None = None
+        if last_run.started_at and last_run.ended_at:
+            duration_ms = int((last_run.ended_at - last_run.started_at).total_seconds() * 1000)
+
+        last_run_summary = RunDebugSummary(
+            id=str(last_run.id),
+            started_at=last_run.started_at,
+            ended_at=last_run.ended_at,
+            status=_status(last_run.status),
+            agent_version=last_run.agent_version,
+            effective_policy_hash=last_run.effective_policy_hash,
+            summary=last_run.summary or {},
+            policy_snapshot=last_run.policy_snapshot or {},
+            detail_path=f"/api/v1/admin/runs/{last_run.id}",
+            items_total=items_total,
+            items_failed=items_failed,
+            items_changed=items_changed,
+            duration_ms=duration_ms,
+        )
+
+    device_summary = DeviceSummary(
+        id=str(device.id),
+        device_key=device.device_key,
+        hostname=device.hostname,
+        os=device.os,
+        os_version=device.os_version,
+        arch=device.arch,
+        agent_version=device.agent_version,
+        enrolled_at=device.enrolled_at,
+        last_seen_at=device.last_seen_at,
+        tags=device.tags or {},
+    )
+
+    return DeviceDebugResponse(
+        device=device_summary,
+        assignments=assignments_out,
+        effective_policy=effective_policy,
+        last_run=last_run_summary,
+        last_run_items=last_items_out,
+    )
+
+
+    assignments_out: list[PolicyAssignmentDebugOut] = []
+    for a, pol in rows:
+        assignments_out.append(
+            PolicyAssignmentDebugOut(
+                assignment_id=str(a.id),
+                created_at=a.created_at,
+                policy_id=str(a.policy_id),
+                policy_name=pol.name,
+                priority=int(a.priority),
+                mode=_status(a.mode) or "enforce",
+                is_active=bool(pol.is_active),
+            )
+        )
+
+    # Effective policy (compiled)
+    snap = compile_effective_policy(db, device)
+    effective_policy = EffectivePolicyResponse(
+        policy_id=None,
+        policy_name=None,
+        schema_version="1",
+        mode=snap.mode,
+        document=snap.policy,
+        effective_policy_hash=str(snap.meta.get("effective_hash") or ""),
+        sources=snap.meta.get("sources") or [],
+        compile=snap.meta.get("compile") or {},
+    )
+
+    # Last run (summary + items)
+    last_run = db.scalar(
+        select(Run)
+        .where(Run.device_id == device.id)
+        .order_by(desc(Run.started_at), desc(Run.id))
+        .limit(1)
+    )
+
+    last_run_summary: RunDebugSummary | None = None
+    last_items_out: list[RunItemDetail] = []
+    if last_run:
         last_run_summary = RunDebugSummary(
             id=str(last_run.id),
             started_at=last_run.started_at,
@@ -320,6 +473,108 @@ def debug_device_bundle(
     )
 
 
+@router.get(
+    "/admin/devices/{device_id}/runs",
+    response_model=DeviceRunsResponse,
+    dependencies=[Depends(require_admin)],
+)
+def list_device_runs(
+    device_id: str = Path(..., description="Device UUID"),
+    db: Session = Depends(get_db),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> DeviceRunsResponse:
+    """Operator QoL: list recent runs for a device.
+
+    This is a convenience wrapper for quickly viewing run history without
+    fetching full run details.
+    """
+
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    base = select(Run).where(Run.device_id == device.id)
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+
+    stmt = base.order_by(desc(Run.started_at), desc(Run.id)).offset(offset).limit(limit)
+    runs = list(db.scalars(stmt).all())
+
+    items_out: list[RunRollup] = []
+    for r in runs:
+        summary = (r.summary or {}) if isinstance(r.summary, dict) else {}
+
+        items_total = _summary_int(summary, "items_total", "itemsTotal")
+        items_failed = _summary_int(summary, "items_failed", "itemsFailed", "failed")
+        items_changed = _summary_int(summary, "items_changed", "itemsChanged")
+        duration_ms = _summary_int(summary, "duration_ms", "durationMs")
+
+        # Fallbacks for older runs that predate these summary fields.
+        if duration_ms is None and r.started_at and r.ended_at:
+            try:
+                duration_ms = int((r.ended_at - r.started_at).total_seconds() * 1000)
+            except Exception:
+                duration_ms = None
+
+        if items_total is None or items_failed is None or items_changed is None:
+            # Best-effort compute from items (small limits; acceptable for admin).
+            its = list(
+                db.scalars(
+                    select(RunItem)
+                    .where(RunItem.run_id == r.id)
+                    .order_by(RunItem.ordinal.asc())
+                ).all()
+            )
+            if items_total is None:
+                items_total = len(its)
+
+            if items_changed is None:
+                items_changed = sum(1 for it in its if bool(it.changed))
+
+            if items_failed is None:
+                def _it_failed(it: RunItem) -> bool:
+                    try:
+                        err = it.error or {}
+                        if isinstance(err, dict) and err.get("type"):
+                            return True
+
+                        def _sf(v: Any) -> bool:
+                            s = ("" if v is None else _status(v) or str(v)).strip().lower()
+                            return s in ("fail", "failed")
+
+                        return _sf(it.status_detect) or _sf(it.status_remediate) or _sf(it.status_validate)
+                    except Exception:
+                        return False
+
+                items_failed = sum(1 for it in its if _it_failed(it))
+
+        items_out.append(
+            RunRollup(
+                id=str(r.id),
+                device_id=str(r.device_id),
+                started_at=r.started_at,
+                ended_at=r.ended_at,
+                status=_status(r.status),
+                agent_version=r.agent_version,
+                effective_policy_hash=r.effective_policy_hash,
+                items_total=items_total,
+                items_failed=items_failed,
+                items_changed=items_changed,
+                duration_ms=duration_ms,
+                summary=summary,
+                detail_path=f"/api/v1/admin/runs/{r.id}",
+            )
+        )
+
+    return DeviceRunsResponse(
+        device_id=str(device.id),
+        items=items_out,
+        limit=limit,
+        offset=offset,
+        total=int(total),
+    )
+
+
 @router.post(
     "/admin/policies",
     response_model=UpsertPolicyResponse,
@@ -328,10 +583,21 @@ def debug_device_bundle(
 def upsert_policy(payload: UpsertPolicyRequest, db: Session = Depends(get_db)) -> UpsertPolicyResponse:
     existing = db.scalar(select(Policy).where(Policy.name == payload.name))
 
+    try:
+        normalized_doc = validate_and_normalize_document(payload.document)
+    except PolicyDocValidationError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "policy document invalid",
+                "errors": [{"path": er.path, "message": er.message} for er in e.errors],
+            },
+        )
+
     if existing:
         existing.description = payload.description
         existing.schema_version = payload.schema_version
-        existing.document = payload.document
+        existing.document = normalized_doc
         existing.is_active = payload.is_active
         existing.updated_at = utcnow()
         db.add(existing)
@@ -342,7 +608,7 @@ def upsert_policy(payload: UpsertPolicyRequest, db: Session = Depends(get_db)) -
         name=payload.name,
         description=payload.description,
         schema_version=payload.schema_version,
-        document=payload.document,
+        document=normalized_doc,
         is_active=payload.is_active,
         created_at=utcnow(),
         updated_at=utcnow(),
@@ -350,6 +616,7 @@ def upsert_policy(payload: UpsertPolicyRequest, db: Session = Depends(get_db)) -
     db.add(policy)
     db.commit()
     return UpsertPolicyResponse(policy_id=str(policy.id), name=policy.name, is_active=policy.is_active)
+
 
 
 @router.get(
@@ -641,4 +908,132 @@ def compile_policy_for_device(device_id: str, db: Session = Depends(get_db)) -> 
 
     snap = compile_effective_policy(db, dev)
     return {"device_id": str(dev.id), "mode": snap.mode, "policy": snap.policy, "meta": snap.meta}
+
+def _chunked(seq: list[Any], size: int) -> list[list[Any]]:
+    if size <= 0:
+        return [seq]
+    return [seq[i:i + size] for i in range(0, len(seq), size)]
+
+
+@router.post(
+    "/admin/maintenance/prune",
+    response_model=PruneResponse,
+    dependencies=[Depends(require_admin)],
+)
+def prune_runs(payload: PruneRequest, db: Session = Depends(get_db)) -> PruneResponse:
+    """Prune old run data to keep the database bounded.
+
+    Rules:
+      - keep runs newer than keep_days
+      - keep at most keep_runs_per_device most-recent runs per device
+      - delete in order: log_events -> run_items -> runs
+
+    Use dry_run=true to see counts without deleting.
+    """
+
+    if payload.keep_days < 0:
+        raise HTTPException(status_code=400, detail="keep_days must be >= 0")
+    if payload.keep_runs_per_device < 0:
+        raise HTTPException(status_code=400, detail="keep_runs_per_device must be >= 0")
+
+    cutoff = utcnow() - timedelta(days=int(payload.keep_days))
+
+    ranked = (
+        select(
+            Run.id.label("run_id"),
+            Run.device_id.label("device_id"),
+            Run.started_at.label("started_at"),
+            func.row_number()
+            .over(
+                partition_by=Run.device_id,
+                order_by=(Run.started_at.desc(), Run.id.desc()),
+            )
+            .label("rn"),
+        )
+    ).subquery()
+
+    # rank condition: delete anything beyond the per-device keep limit.
+    if int(payload.keep_runs_per_device) > 0:
+        cond_rank = ranked.c.rn > int(payload.keep_runs_per_device)
+    else:
+        # keep_runs_per_device == 0 => delete all runs (subject to keep_days if keep_days>0)
+        cond_rank = ranked.c.rn >= 1
+
+    # age condition: delete anything older than cutoff (disabled if keep_days == 0)
+    cond_age = ranked.c.started_at < cutoff if int(payload.keep_days) > 0 else False
+
+    where_clause = cond_rank if cond_age is False else (cond_rank | cond_age)
+
+    run_ids = [r[0] for r in db.execute(select(ranked.c.run_id).where(where_clause)).all()]
+
+    runs_targeted = len(run_ids)
+
+    counts_runs = runs_targeted
+    counts_items = 0
+    counts_logs = 0
+
+    if run_ids:
+        counts_items = int(
+            db.scalar(
+                select(func.count()).select_from(RunItem).where(RunItem.run_id.in_(run_ids))
+            )
+            or 0
+        )
+        counts_logs = int(
+            db.scalar(
+                select(func.count()).select_from(LogEvent).where(LogEvent.run_id.in_(run_ids))
+            )
+            or 0
+        )
+
+    if payload.dry_run:
+        return PruneResponse(
+            dry_run=True,
+            keep_days=int(payload.keep_days),
+            keep_runs_per_device=int(payload.keep_runs_per_device),
+            cutoff=cutoff,
+            runs_targeted=runs_targeted,
+            counts=PruneCounts(runs=counts_runs, run_items=counts_items, log_events=counts_logs),
+            notes={"mode": "dry_run"},
+        )
+
+
+    deleted_logs = 0
+    deleted_items = 0
+    deleted_runs = 0
+
+    for chunk in _chunked(run_ids, int(payload.batch_size)):
+        if not chunk:
+            continue
+
+        deleted_logs += int(
+            db.query(LogEvent)
+            .filter(LogEvent.run_id.in_(chunk))
+            .delete(synchronize_session=False)
+            or 0
+        )
+        deleted_items += int(
+            db.query(RunItem)
+            .filter(RunItem.run_id.in_(chunk))
+            .delete(synchronize_session=False)
+            or 0
+        )
+        deleted_runs += int(
+            db.query(Run)
+            .filter(Run.id.in_(chunk))
+            .delete(synchronize_session=False)
+            or 0
+        )
+
+    db.commit()
+
+    return PruneResponse(
+    dry_run=False,
+    keep_days=int(payload.keep_days),
+    keep_runs_per_device=int(payload.keep_runs_per_device),
+    cutoff=cutoff,
+    runs_targeted=runs_targeted,
+    counts=PruneCounts(runs=deleted_runs, run_items=deleted_items, log_events=deleted_logs),
+    notes={"mode": "deleted"},
+)
 

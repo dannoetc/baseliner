@@ -10,12 +10,11 @@ from sqlalchemy.orm import Session
 
 # NOTE: dependencies live in api.deps; core.auth only contains the auth logic.
 from baseliner_server.api.deps import get_current_device, get_db
-from baseliner_server.core.policy_hash import compute_effective_policy_hash
 from baseliner_server.services.policy_compiler import compile_effective_policy
-from baseliner_server.db.models import Device, LogEvent, Policy, PolicyAssignment, Run, RunItem
+from baseliner_server.db.models import Device, LogEvent, Run, RunItem
+from baseliner_server.db.models import StepStatus, RunStatus
 from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.report import SubmitReportRequest, SubmitReportResponse
-from baseliner_server.db.models import StepStatus
 
 
 router = APIRouter(tags=["device"])
@@ -24,9 +23,10 @@ router = APIRouter(tags=["device"])
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+
 def _coerce_step_status(value: str | None) -> StepStatus:
     """
-    Accept legacy/agent strings and map to DB enum values.
+    Accept legacy/agent strings and map to DB enum values used in previous dev versions
     DB StepStatus allows: not_run, ok, fail, skipped
     """
     v = (value or "").strip().lower()
@@ -38,6 +38,7 @@ def _coerce_step_status(value: str | None) -> StepStatus:
         return StepStatus(v)  # type: ignore[arg-type]
     except Exception:
         return StepStatus.not_run
+
 
 def normalize_policy_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     """
@@ -57,6 +58,63 @@ def normalize_policy_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     for k, v in snapshot.items():
         out[keymap.get(k, k)] = v
     return out
+
+
+def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
+    if not isinstance(summary, dict):
+        return None
+    for k in keys:
+        if k not in summary:
+            continue
+        v = summary.get(k)
+        if v is None:
+            continue
+        try:
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                return int(v)
+            if isinstance(v, str) and v.strip():
+                return int(float(v.strip()))
+        except Exception:
+            continue
+    return None
+
+
+def _is_item_failed(item: Any) -> bool:
+    """Determine whether a reported item should be treated as failed.
+
+    For MVP we enforce strong invariants:
+      - a run is failed if any item is failed
+      - an item is failed if it has error.type or any step status is fail/failed
+    """
+    try:
+        err = getattr(item, "error", None) or {}
+        if isinstance(err, dict) and err.get("type"):
+            return True
+
+        def _sf(v: str | None) -> bool:
+            s = (v or "").strip().lower()
+            return s in ("fail", "failed")
+
+        return (
+            _sf(getattr(item, "status_detect", None))
+            or _sf(getattr(item, "status_remediate", None))
+            or _sf(getattr(item, "status_validate", None))
+        )
+    except Exception:
+        return False
+
+
+def _normalize_run_status(payload_status: str | None, *, items_total: int, items_failed: int) -> RunStatus:
+    """Normalize run status for storage.
+
+    Device reports should always represent a completed execution.
+    We override ambiguous statuses (running/partial/etc) to keep invariants.
+    """
+    if items_total == 0:
+        return RunStatus.succeeded
+    return RunStatus.failed if items_failed > 0 else RunStatus.succeeded
 
 
 @router.get("/device/policy", response_model=EffectivePolicyResponse)
@@ -83,6 +141,7 @@ def get_effective_policy(
     )
     return resp
 
+
 @router.post("/device/reports", response_model=SubmitReportResponse)
 def submit_report(
     payload: SubmitReportRequest,
@@ -91,22 +150,48 @@ def submit_report(
 ) -> SubmitReportResponse:
     snapshot = normalize_policy_snapshot(payload.policy_snapshot or {})
 
+    # Authoritative counts from items (do not trust client summary).
+    items_total_calc = len(payload.items or [])
+    items_failed_calc = sum(1 for it in (payload.items or []) if _is_item_failed(it))
+    items_changed_calc = sum(1 for it in (payload.items or []) if bool(getattr(it, "changed", False)))
+
+    ended_at = payload.ended_at or utcnow()
+    status = _normalize_run_status(payload.status, items_total=items_total_calc, items_failed=items_failed_calc)
+
+    summary = payload.summary or {}
+    if not isinstance(summary, dict):
+        summary = {}
+
+    # Allow duration to be supplied by the agent (optional).
+    duration_ms = _summary_int(summary, "duration_ms", "durationMs")
+
+    # Ensure canonical summary keys exist for operator QoL endpoints.
+    summary["items_total"] = int(items_total_calc)
+    summary["items_failed"] = int(items_failed_calc)
+    summary["items_changed"] = int(items_changed_calc)
+    if duration_ms is not None:
+        summary["duration_ms"] = int(duration_ms)
+
+    # Optional legacy mirror for older tooling.
+    summary.setdefault("itemsTotal", summary["items_total"])
+    summary.setdefault("failed", summary["items_failed"])
+
     run = Run(
         device_id=device.id,
         started_at=payload.started_at,
-        ended_at=payload.ended_at,
-        status=payload.status,
+        ended_at=ended_at,
+        status=status,
         agent_version=payload.agent_version,
         effective_policy_hash=payload.effective_policy_hash,  # agent sends server hash (or fallback)
         policy_snapshot=snapshot,
-        summary=payload.summary or {},
+        summary=summary,
     )
     db.add(run)
     db.flush()  # run.id available
 
     # Items (we store ordinal so logs can reference it)
     ordinal_to_item_id: dict[int, uuid.UUID] = {}
-    for item in payload.items:
+    for item in (payload.items or []):
         run_item = RunItem(
             run_id=run.id,
             resource_type=item.resource_type,
@@ -130,7 +215,20 @@ def submit_report(
         ordinal_to_item_id[item.ordinal] = run_item.id
 
     # Logs
-    for log in payload.logs:
+    if payload.status and payload.status != status.value:
+        # Useful breadcrumb for debugging client/server mismatch.
+        db.add(
+            LogEvent(
+                run_id=run.id,
+                run_item_id=None,
+                ts=utcnow(),
+                level="warning",
+                message="server normalized run status",
+                data={"reported": payload.status, "stored": status.value, "items_failed": items_failed_calc},
+            )
+        )
+
+    for log in (payload.logs or []):
         run_item_id = None
         if log.run_item_ordinal is not None:
             run_item_id = ordinal_to_item_id.get(log.run_item_ordinal)

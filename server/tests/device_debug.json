@@ -1,26 +1,27 @@
 {
   "device": {
-    "id": "31d9ea4d-8181-4946-95ae-6488c19898bc",
-    "device_key": "TEST-DEVICE-001",
+    "id": "7a912a9e-acda-4100-b755-2a77fe523e33",
+    "device_key": "DESKTOP-FTVVO4A",
     "hostname": "DESKTOP-FTVVO4A",
     "os": "windows",
     "os_version": "10.0.26200",
     "arch": "AMD64",
     "agent_version": "0.1.0-dev",
-    "enrolled_at": "2025-12-13T00:32:59.47117Z",
+    "enrolled_at": "2025-12-14T01:44:31.317284Z",
     "tags": {
-      "env": "dev"
+      "env": "dev",
+      "site": "denver"
     },
-    "last_seen_at": "2025-12-17T00:59:29.49499Z",
+    "last_seen_at": "2025-12-17T02:45:56.06952Z",
     "last_run": null,
     "health": null
   },
   "assignments": [
     {
-      "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
-      "created_at": "2025-12-13T01:47:56.325923Z",
-      "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-      "policy_name": "baseliner-windows-core",
+      "assignment_id": "ad24c9f7-f148-4500-8763-3379b8ffedd0",
+      "created_at": "2025-12-17T02:45:38.656808Z",
+      "policy_id": "2ebe7777-78ae-4b57-9db7-255d91ffac78",
+      "policy_name": "test-ps-timeout",
       "priority": 100,
       "mode": "enforce",
       "is_active": true
@@ -34,38 +35,20 @@
     "document": {
       "resources": [
         {
-          "id": "VideoLAN.VLC",
-          "type": "winget.package",
-          "ensure": "present",
-          "allowUpgrade": true
-        },
-        {
-          "id": "Mozilla.Firefox",
-          "type": "winget.package",
-          "ensure": "present",
-          "minVersion": "120.0.0",
-          "allowUpgrade": true
-        },
-        {
-          "id": "7zip.7zip",
-          "type": "winget.package",
-          "ensure": "present",
-          "allowUpgrade": true
-        },
-        {
-          "id": "timezone",
-          "name": "Set Time Zone to Eastern",
+          "id": "pshang",
+          "name": "powershell remediation timeout test",
           "type": "script.powershell",
-          "detect": "if ((Get-TimeZone).Id -eq 'Eastern Standard Time') { exit 0 } else { exit 1 }",
-          "remediate": "Set-TimeZone -Id 'Eastern Standard Time'"
+          "detect": "exit 1",
+          "remediate": "Start-Sleep -Seconds 9999; exit 0",
+          "timeout_seconds": 10
         }
       ]
     },
-    "effective_policy_hash": "9c179eb34c52fa23a3e92c8b4d5eff73e53509d6f4f0bf482809ac822eeed393",
+    "effective_policy_hash": "930dac94f665b539c88501cde3d4733e83cc69e7d0620a920f2a72d2bfad2934",
     "sources": [
       {
-        "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-        "policy_name": "baseliner-windows-core",
+        "policy_id": "2ebe7777-78ae-4b57-9db7-255d91ffac78",
+        "policy_name": "test-ps-timeout",
         "priority": 100,
         "assignment_mode": "enforce",
         "schema_version": "1.0"
@@ -83,74 +66,62 @@
       },
       "assignments": [
         {
-          "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
-          "created_at": "2025-12-13T01:47:56.325923Z",
-          "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-          "policy_name": "baseliner-windows-core",
+          "assignment_id": "ad24c9f7-f148-4500-8763-3379b8ffedd0",
+          "created_at": "2025-12-17T02:45:38.656808Z",
+          "policy_id": "2ebe7777-78ae-4b57-9db7-255d91ffac78",
+          "policy_name": "test-ps-timeout",
           "priority": 100,
           "assignment_mode": "enforce",
           "schema_version": "1.0"
         }
       ],
-      "resources": {
-        "winget.package::videolan.vlc": {
-          "resource": {
-            "type": "winget.package",
-            "id": "videolan.vlc"
-          },
-          "source": {
-            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
-            "created_at": "2025-12-13T01:47:56.325923Z",
-            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-            "policy_name": "baseliner-windows-core",
-            "priority": 100,
-            "assignment_mode": "enforce",
-            "schema_version": "1.0"
-          },
-          "overrides": []
-        },
-        "winget.package::mozilla.firefox": {
-          "resource": {
-            "type": "winget.package",
-            "id": "mozilla.firefox"
-          },
-          "source": {
-            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
-            "created_at": "2025-12-13T01:47:56.325923Z",
-            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-            "policy_name": "baseliner-windows-core",
-            "priority": 100,
-            "assignment_mode": "enforce",
-            "schema_version": "1.0"
-          },
-          "overrides": []
-        },
-        "winget.package::7zip.7zip": {
-          "resource": {
-            "type": "winget.package",
-            "id": "7zip.7zip"
-          },
-          "source": {
-            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
-            "created_at": "2025-12-13T01:47:56.325923Z",
-            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-            "policy_name": "baseliner-windows-core",
-            "priority": 100,
-            "assignment_mode": "enforce",
-            "schema_version": "1.0"
-          },
-          "overrides": []
-        },
-        "script.powershell::timezone": {
-          "resource": {
+      "resources": [
+        {
+          "key": {
             "type": "script.powershell",
-            "id": "timezone"
+            "id": "pshang"
+          },
+          "key_str": "script.powershell:pshang",
+          "effective_resource": {
+            "id": "pshang",
+            "name": "powershell remediation timeout test",
+            "type": "script.powershell",
+            "detect": "exit 1",
+            "remediate": "Start-Sleep -Seconds 9999; exit 0",
+            "timeout_seconds": 10
           },
           "source": {
-            "assignment_id": "6e180128-5e20-48b1-9d60-834c66ce1846",
-            "created_at": "2025-12-13T01:47:56.325923Z",
-            "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-            "policy_name": "baseliner-windows-core",
+            "assignment_id": "ad24c9f7-f148-4500-8763-3379b8ffedd0",
+            "created_at": "2025-12-17T02:45:38.656808Z",
+            "policy_id": "2ebe7777-78ae-4b57-9db7-255d91ffac78",
+            "policy_name": "test-ps-timeout",
+            "priority": 100,
+            "assignment_mode": "enforce",
+            "schema_version": "1.0"
+          },
+          "overrides": []
+        }
+      ],
+      "resources_index": {
+        "script.powershell:pshang": {
+          "key": {
+            "type": "script.powershell",
+            "id": "pshang"
+          },
+          "key_str": "script.powershell:pshang",
+          "effective_resource": {
+            "id": "pshang",
+            "name": "powershell remediation timeout test",
+            "type": "script.powershell",
+            "detect": "exit 1",
+            "remediate": "Start-Sleep -Seconds 9999; exit 0",
+            "timeout_seconds": 10
+          },
+          "source": {
+            "assignment_id": "ad24c9f7-f148-4500-8763-3379b8ffedd0",
+            "created_at": "2025-12-17T02:45:38.656808Z",
+            "policy_id": "2ebe7777-78ae-4b57-9db7-255d91ffac78",
+            "policy_name": "test-ps-timeout",
             "priority": 100,
             "assignment_mode": "enforce",
             "schema_version": "1.0"
@@ -162,22 +133,78 @@
     }
   },
   "last_run": {
-    "id": "d2dbf604-a2e0-4aa6-bd80-38cce35fa072",
-    "started_at": "2025-12-15T22:59:00.768458Z",
-    "ended_at": "2025-12-15T22:59:00.768458Z",
-    "status": "succeeded",
+    "id": "d3177c2e-6453-4bc5-a5ae-fa3d4b07f504",
+    "started_at": "2025-12-17T02:45:41.025493Z",
+    "ended_at": "2025-12-17T02:45:54.004068Z",
+    "status": "failed",
     "agent_version": "0.1.0-dev",
-    "effective_policy_hash": null,
+    "effective_policy_hash": "930dac94f665b539c88501cde3d4733e83cc69e7d0620a920f2a72d2bfad2934",
     "summary": {
       "ok": 0,
-      "failed": 0,
-      "itemsTotal": 0
+      "failed": 1,
+      "itemsTotal": 1,
+      "observed_state_hash": "6e9ae39ddc58d0be8d308ceb703a13b016eae177ef25595afc01c2d59011b949"
     },
     "policy_snapshot": {
-      "policy_id": "61976164-89e4-434e-a4c5-ae43b0b3272d",
-      "policy_name": "baseliner-windows-core"
+      "policy_id": null,
+      "policy_name": null,
+      "effective_policy_hash": "930dac94f665b539c88501cde3d4733e83cc69e7d0620a920f2a72d2bfad2934"
     },
-    "detail_path": "/api/v1/admin/runs/d2dbf604-a2e0-4aa6-bd80-38cce35fa072"
+    "detail_path": "/api/v1/admin/runs/d3177c2e-6453-4bc5-a5ae-fa3d4b07f504",
+    "items_total": 1,
+    "items_failed": 1,
+    "items_changed": 0,
+    "duration_ms": 12978
   },
-  "last_run_items": []
+  "last_run_items": [
+    {
+      "id": "9d7041ae-99a3-4a5a-b9f9-30da768b8f8f",
+      "ordinal": 0,
+      "resource_type": "script.powershell",
+      "resource_id": "pshang",
+      "name": "powershell remediation timeout test",
+      "compliant_before": false,
+      "compliant_after": false,
+      "changed": false,
+      "reboot_required": false,
+      "status_detect": "fail",
+      "status_remediate": "fail",
+      "status_validate": "fail",
+      "started_at": "2025-12-17T02:45:43.11441Z",
+      "ended_at": "2025-12-17T02:45:54.003066Z",
+      "evidence": {
+        "meta": {
+          "timeouts": {
+            "detect_seconds": 10,
+            "validate_seconds": 10,
+            "remediate_seconds": 10
+          },
+          "detect_source": "detect",
+          "remediate_source": "remediate"
+        },
+        "detect": {
+          "engine": "pwsh",
+          "stderr": "",
+          "stdout": "",
+          "exit_code": 1
+        },
+        "validate": {
+          "engine": "pwsh",
+          "stderr": "",
+          "stdout": "",
+          "exit_code": 1
+        },
+        "remediate": {
+          "engine": "pwsh",
+          "stderr": "timeout after 10s; killed process tree pid=6876",
+          "stdout": "",
+          "exit_code": 124
+        }
+      },
+      "error": {
+        "type": "timeout",
+        "message": "Remediate timed out after 10s"
+      }
+    }
+  ]
 }
