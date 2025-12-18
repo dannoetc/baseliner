@@ -1,0 +1,74 @@
+{
+  "device": {
+    "id": "7a912a9e-acda-4100-b755-2a77fe523e33",
+    "device_key": "DESKTOP-FTVVO4A",
+    "hostname": "DESKTOP-FTVVO4A",
+    "os": "windows",
+    "os_version": "10.0.26200",
+    "arch": "AMD64",
+    "agent_version": "0.1.0-dev",
+    "enrolled_at": "2025-12-14T01:44:31.317284Z",
+    "tags": {
+      "env": "dev"
+    },
+    "last_seen_at": "2025-12-18T05:35:03.797939Z",
+    "last_run": null,
+    "health": null
+  },
+  "assignments": [],
+  "effective_policy": {
+    "policy_id": null,
+    "policy_name": null,
+    "schema_version": "1",
+    "mode": "enforce",
+    "document": {
+      "resources": []
+    },
+    "effective_policy_hash": "833d62d43478607ff2aef59828f1336b802e311da5ba02bea0628d1c88a7d9ff",
+    "sources": [],
+    "compile": {
+      "merge": {
+        "priority": "lower numeric priority wins (processed first)",
+        "tie_breakers": [
+          "assignment.created_at asc",
+          "assignment.id asc"
+        ],
+        "dedupe": "first-wins per resource key (type,id); winget.package de-duped by catalog id when present",
+        "mode": "audit only if all active assignments are audit; otherwise enforce"
+      },
+      "assignments": [],
+      "resources": [],
+      "resources_index": {},
+      "conflicts": []
+    }
+  },
+  "last_run": {
+    "id": "1a23c647-7822-4400-ad41-ca08e203e7fa",
+    "started_at": "2025-12-18T04:03:24.901404Z",
+    "ended_at": "2025-12-18T04:03:26.997352Z",
+    "status": "succeeded",
+    "agent_version": "0.1.0-dev",
+    "effective_policy_hash": "833d62d43478607ff2aef59828f1336b802e311da5ba02bea0628d1c88a7d9ff",
+    "summary": {
+      "ok": 0,
+      "failed": 0,
+      "reason": "no_policy_assigned",
+      "itemsTotal": 0,
+      "items_total": 0,
+      "items_failed": 0,
+      "items_changed": 0,
+      "observed_state_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "policy_snapshot": {
+      "policy_id": null,
+      "policy_name": null,
+      "effective_policy_hash": "833d62d43478607ff2aef59828f1336b802e311da5ba02bea0628d1c88a7d9ff"
+    },
+    "detail_path": "/api/v1/admin/runs/1a23c647-7822-4400-ad41-ca08e203e7fa",
+    "items_total": 0,
+    "items_failed": 0,
+    "items_changed": 0,
+    "duration_ms": 2095
+  },
+  "last_run_items": []
+}

@@ -71,7 +71,6 @@ function New-RepeatingTrigger {
     }
 }
 
-
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $Text, $utf8NoBom)
@@ -239,6 +238,7 @@ param(
     [Parameter(Mandatory)][string]$Config,
     [Parameter(Mandatory)][string]$State,
     [Parameter(Mandatory)][string]$Server,
+    [Parameter(Mandatory)][string]$LogDir,
     [Parameter()][string]$Tags = "",
     [Parameter()][string]$Log = "",
     [Parameter()][int]$JitterSeconds = 0
@@ -250,25 +250,73 @@ Set-StrictMode -Version Latest
 function Now-Iso { (Get-Date).ToString("s") }
 function Ensure-Dir([string]$Path) { if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Force -Path $Path | Out-Null } }
 
-if ($Log) {
-    Ensure-Dir (Split-Path -Parent $Log)
-    "==== baseliner task tick: $((Now-Iso)) ====" | Out-File $Log -Append -Encoding utf8
-    "exe=$Exe" | Out-File $Log -Append -Encoding utf8
-    "server=$Server" | Out-File $Log -Append -Encoding utf8
+function Safe-Append([string]$Path, [string[]]$Lines) {
+    try {
+        $Lines | Out-File -LiteralPath $Path -Append -Encoding utf8 -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
 }
+
+function LogLine([string]$s) {
+    if (-not $Log) { return }
+    Ensure-Dir (Split-Path -Parent $Log)
+    if (-not (Safe-Append -Path $Log -Lines @($s))) {
+        try {
+            $fallback = Join-Path $env:TEMP "baseliner-agent-runner-fallback.log"
+            $s | Out-File -LiteralPath $fallback -Append -Encoding utf8
+        } catch { }
+    }
+}
+
+# Per-run output lives under LogDir\runner (NOT State)
+Ensure-Dir $LogDir
+$OutDir = Join-Path $LogDir "runner"
+Ensure-Dir $OutDir
+
+$runStamp = (Get-Date).ToString("yyyyMMdd-HHmmss-fff")
+$runId    = ([guid]::NewGuid().ToString("N"))
+$outPath  = Join-Path $OutDir ("agent-{0}-{1}.out.log" -f $runStamp, $runId)
+
+# Header
+LogLine "==== baseliner task tick: $((Now-Iso)) ===="
+LogLine ("whoami={0}" -f ([Security.Principal.WindowsIdentity]::GetCurrent().Name))
+LogLine ("psver={0}" -f $PSVersionTable.PSVersion.ToString())
+LogLine "exe=$Exe"
+LogLine "config=$Config"
+LogLine "state=$State"
+LogLine "server=$Server"
+if ($Tags) { LogLine "tags=$Tags" }
+LogLine ("out={0}" -f $outPath)
+
+Safe-Append -Path $outPath -Lines @(
+    "==== baseliner agent run: $((Now-Iso)) ====",
+    ("whoami={0}" -f ([Security.Principal.WindowsIdentity]::GetCurrent().Name)),
+    ("psver={0}" -f $PSVersionTable.PSVersion.ToString()),
+    "exe=$Exe",
+    "config=$Config",
+    "state=$State",
+    "server=$Server",
+    ("tags={0}" -f $Tags)
+) | Out-Null
 
 if ($JitterSeconds -gt 0) {
     $j = Get-Random -Minimum 0 -Maximum ($JitterSeconds + 1)
-    if ($Log) { "[TASK] jitter_sleep_s=$j" | Out-File $Log -Append -Encoding utf8 }
+    LogLine ("[TASK] jitter_sleep_s={0}" -f $j)
+    Safe-Append -Path $outPath -Lines @("[TASK] jitter_sleep_s=$j") | Out-Null
     Start-Sleep -Seconds $j
 }
 
 try { chcp 65001 | Out-Null } catch { }
 $env:PYTHONUTF8 = "1"
 
-if (Test-Path -LiteralPath $State) {
-    try { Set-Location -LiteralPath $State } catch { }
-}
+# Validate
+if (-not (Test-Path -LiteralPath $Exe))    { LogLine "[ERROR] exe missing";    Safe-Append -Path $outPath -Lines @("[ERROR] exe missing") | Out-Null; exit 2 }
+if (-not (Test-Path -LiteralPath $Config)) { LogLine "[ERROR] config missing"; Safe-Append -Path $outPath -Lines @("[ERROR] config missing") | Out-Null; exit 2 }
+if (-not (Test-Path -LiteralPath $State))  { Ensure-Dir $State }
+
+try { Set-Location -LiteralPath $State } catch { }
 
 $args = @(
     "--config", $Config,
@@ -277,19 +325,51 @@ $args = @(
     "--server", $Server
 )
 
-if ($Tags) {
-    $args += @("--tags", $Tags)
+# IMPORTANT:
+# Do NOT pass --tags to run-once unless the agent CLI explicitly supports it.
+# (The agent currently errors with "unrecognized arguments: --tags ...")
+# Tags are still logged above for traceability.
+
+$tmpStdout = Join-Path $OutDir ("stdout-{0}-{1}.log" -f $runStamp, $runId)
+$tmpStderr = Join-Path $OutDir ("stderr-{0}-{1}.log" -f $runStamp, $runId)
+
+try {
+    Safe-Append -Path $outPath -Lines @("[TASK] invoke: `"$Exe`" $($args -join ' ')") | Out-Null
+
+    $p = Start-Process -FilePath $Exe `
+        -ArgumentList $args `
+        -NoNewWindow `
+        -PassThru `
+        -Wait `
+        -RedirectStandardOutput $tmpStdout `
+        -RedirectStandardError  $tmpStderr
+
+    $code = $p.ExitCode
+
+    if (Test-Path -LiteralPath $tmpStdout) {
+        Safe-Append -Path $outPath -Lines @("---- stdout ----") | Out-Null
+        Get-Content -LiteralPath $tmpStdout -ErrorAction SilentlyContinue | Out-File -LiteralPath $outPath -Append -Encoding utf8
+    }
+    if (Test-Path -LiteralPath $tmpStderr) {
+        Safe-Append -Path $outPath -Lines @("---- stderr ----") | Out-Null
+        Get-Content -LiteralPath $tmpStderr -ErrorAction SilentlyContinue | Out-File -LiteralPath $outPath -Append -Encoding utf8
+    }
+
+    Safe-Append -Path $outPath -Lines @("[TASK] exit_code=$code ts=$((Now-Iso))") | Out-Null
+    LogLine ("[TASK] exit_code={0} ts={1}" -f $code, (Now-Iso))
+
+    Remove-Item -LiteralPath $tmpStdout -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpStderr -Force -ErrorAction SilentlyContinue
+
+    exit $code
 }
-
-$out = & $Exe @args 2>&1
-$code = $LASTEXITCODE
-
-if ($Log) {
-    if ($out) { $out | Out-File $Log -Append -Encoding utf8 }
-    ("[TASK] exit_code={0} ts={1}" -f $code, (Now-Iso)) | Out-File $Log -Append -Encoding utf8
+catch {
+    $msg = $_.Exception.ToString()
+    LogLine "[ERROR] exception invoking agent:"
+    LogLine $msg
+    Safe-Append -Path $outPath -Lines @("[ERROR] exception invoking agent:", $msg, ("[TASK] exit_code=1 ts={0}" -f (Now-Iso))) | Out-Null
+    exit 1
 }
-
-exit $code
 '@
 
 Write-Utf8NoBom -Path $WrapperPath -Text $wrapper
@@ -305,6 +385,7 @@ $argList = @(
     "-ExecutionPolicy", "Bypass",
     "-File", "`"$WrapperPath`"",
     "-Exe", "`"$ExePath`"",
+    "-LogDir", "`"$LogDir`"",
     "-Config", "`"$ConfigPath`"",
     "-State", "`"$DataDir`"",
     "-Server", "`"$ServerUrl`"",
@@ -318,10 +399,8 @@ $action = New-ScheduledTaskAction -Execute $psExe -Argument $argList -WorkingDir
 # Triggers:
 #  - AtStartup (one run when machine boots)
 #  - Repeating trigger every IntervalSeconds (start 1 minute from now)
-
 $startup = New-ScheduledTaskTrigger -AtStartup
 $repeat = New-RepeatingTrigger -StartAt (Get-Date).AddMinutes(1) -IntervalSeconds $IntervalSeconds
-
 
 if ($RunAs -eq "SYSTEM") {
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest

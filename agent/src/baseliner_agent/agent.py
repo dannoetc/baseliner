@@ -32,6 +32,33 @@ def _device_facts() -> dict[str, Any]:
     }
 
 
+def _offline_report(*, state: AgentState, started: str, ended: str, error: str) -> dict[str, Any]:
+    return {
+        "started_at": started,
+        "ended_at": ended,
+        "status": "failed",
+        "agent_version": state.agent_version,
+        "effective_policy_hash": "",
+        "policy_snapshot": {
+            "policy_id": None,
+            "policy_name": None,
+            "effective_policy_hash": "",
+        },
+        "summary": {
+            "itemsTotal": 0,
+            "ok": 0,
+            "failed": 0,
+            "observed_state_hash": "",
+            "reason": "policy_fetch_failed",
+            "error": error,
+        },
+        "items": [],
+        "logs": [
+            {"ts": ended, "level": "error", "message": "Failed to fetch policy; server unreachable", "data": {"error": error}},
+        ],
+    }
+
+
 def _canonical_policy_hash(pol: dict[str, Any]) -> str:
     payload = {
         "policy_id": pol.get("policy_id"),
@@ -117,26 +144,64 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     started = utcnow_iso()
     run_log = new_run_log_path(state_dir, started, local_run_id)
 
-    log_event(
-        run_log,
-        {
-            "ts": started,
-            "level": "info",
-            "event": "run_start",
-            "local_run_id": local_run_id,
-            "server": server,
-            "device_id": state.device_id,
-            "device_key": state.device_key,
-            "agent_version": state.agent_version,
-            "force": bool(force),
-        },
-    )
+    log_event(run_log, {
+        "ts": started, "level": "info", "event": "run_start",
+        "local_run_id": local_run_id, "server": server,
+        "device_id": state.device_id, "device_key": state.device_key,
+        "agent_version": state.agent_version, "force": bool(force),
+    })
 
-    # Flush queued reports from prior failures (best-effort)
-    _flush_queue(client, state, state_dir, run_log=run_log, local_run_id=local_run_id)
+    # Best-effort flush; if server is down, don't crash the run
+    try:
+        _flush_queue(client, state, state_dir, run_log=run_log, local_run_id=local_run_id)
+    except Exception as e:
+        log_event(run_log, {
+            "ts": utcnow_iso(), "level": "warning", "event": "queue_flush_failed",
+            "local_run_id": local_run_id, "error": str(e),
+        })
 
-    # Fetch effective policy
-    pol = client.get_json("/api/v1/device/policy")
+    # Fetch effective policy (MUST NOT hard-crash the whole run)
+    try:
+        pol = client.get_json("/api/v1/device/policy")
+    except Exception as e:
+        ended = utcnow_iso()
+        err = str(e)
+
+        log_event(run_log, {
+            "ts": ended, "level": "error", "event": "policy_fetch_failed",
+            "local_run_id": local_run_id, "error": err,
+        })
+
+        # Update local state + health even though we're offline
+        state.last_run_at = ended
+        state.last_run_status = "failed"
+        state.last_run_exit = 1
+        state.last_failed_at = ended
+        state.consecutive_failures = int(state.consecutive_failures or 0) + 1
+        state.save(state_dir)
+
+        try:
+            write_health(state_dir, state=state)
+        except Exception:
+            pass
+
+        # Queue a minimal offline report so backlog/flush can be tested
+        try:
+            mf, mb = queue_limits()
+            prune_queue(state_dir, max_files=mf, max_bytes=mb)
+            path = queue_report(state_dir, _offline_report(state=state, started=started, ended=ended, error=err))
+            log_event(run_log, {
+                "ts": utcnow_iso(), "level": "warning", "event": "offline_report_queued",
+                "local_run_id": local_run_id, "queued_path": str(path),
+            })
+        except Exception as qe:
+            log_event(run_log, {
+                "ts": utcnow_iso(), "level": "warning", "event": "offline_report_queue_failed",
+                "local_run_id": local_run_id, "error": str(qe),
+            })
+
+        print(f"[ERROR] {err}")
+        return
     server_hash = pol.get("effective_policy_hash")
     effective_hash = server_hash or _canonical_policy_hash(pol)
 
