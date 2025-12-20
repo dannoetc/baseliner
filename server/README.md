@@ -3,7 +3,7 @@
 FastAPI-based API that handles device enrollment, policy management, effective policy compilation, and run reporting for the Baseliner ecosystem.
 
 ## Requirements
-- Python 3.11+
+- Python 3.12
 - Postgres 16 (local install or Docker)
 
 ## Docker compose
@@ -53,3 +53,23 @@ This starts Postgres + the API and runs migrations automatically.
 ```bash
 pytest
 ```
+
+## Request hardening (Issue #23)
+
+The server includes basic, configurable protections:
+
+### Request body size limits (413)
+
+Controlled by:
+- `MAX_REQUEST_BODY_BYTES_DEFAULT` (default: ~1MB)
+- `MAX_REQUEST_BODY_BYTES_DEVICE_REPORTS` (default: ~10MB)
+
+### Rate limiting for device report ingestion (429)
+
+Controlled by:
+- `RATE_LIMIT_ENABLED` (default: true)
+- `RATE_LIMIT_REPORTS_PER_MINUTE` + `RATE_LIMIT_REPORTS_BURST` (device key)
+- `RATE_LIMIT_REPORTS_IP_PER_MINUTE` + `RATE_LIMIT_REPORTS_IP_BURST` (fallback)
+
+Notes:
+- App-layer rate limiting is **in-memory** (per process). For production, consider adding an nginx/edge rate limit as well.

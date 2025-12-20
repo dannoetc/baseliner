@@ -30,6 +30,28 @@ services:
       - api
     environment:
       BASELINER_DOMAIN: ${BASELINER_DOMAIN}
+      # Optional: nginx edge limiting (Issue #23). Defaults to disabled.
+      NGINX_LIMITS_ENABLED: ${NGINX_LIMITS_ENABLED:-false}
+      # Per-IP request rate limiting (nginx `rate=` syntax, e.g. "5r/s" or "60r/m")
+      NGINX_LIMIT_REQ_REPORTS_RATE: ${NGINX_LIMIT_REQ_REPORTS_RATE:-"5r/s"}
+      NGINX_LIMIT_REQ_REPORTS_BURST: ${NGINX_LIMIT_REQ_REPORTS_BURST:-20}
+      NGINX_LIMIT_REQ_GENERAL_RATE: ${NGINX_LIMIT_REQ_GENERAL_RATE:-"10r/s"}
+      NGINX_LIMIT_REQ_GENERAL_BURST: ${NGINX_LIMIT_REQ_GENERAL_BURST:-40}
+      # Per-IP concurrent connection limiting
+      NGINX_LIMIT_CONN_REPORTS_PER_IP: ${NGINX_LIMIT_CONN_REPORTS_PER_IP:-20}
+      NGINX_LIMIT_CONN_GENERAL_PER_IP: ${NGINX_LIMIT_CONN_GENERAL_PER_IP:-50}
+      # Zone sizes (shared memory) for nginx limiters
+      NGINX_LIMIT_REQ_ZONE_SIZE: ${NGINX_LIMIT_REQ_ZONE_SIZE:-"10m"}
+      NGINX_LIMIT_CONN_ZONE_SIZE: ${NGINX_LIMIT_CONN_ZONE_SIZE:-"10m"}
+
+      # Optional: real client IP extraction (recommended when nginx sits behind another proxy/LB)
+      # Defaults to disabled.
+      NGINX_REALIP_ENABLED: ${NGINX_REALIP_ENABLED:-false}
+      NGINX_REALIP_HEADER: ${NGINX_REALIP_HEADER:-"X-Forwarded-For"}
+      NGINX_REALIP_RECURSIVE: ${NGINX_REALIP_RECURSIVE:-"on"}
+      # Comma- or space-separated CIDRs for trusted proxies/LBs.
+      # If empty and NGINX_REALIP_ENABLED=true, nginx defaults to common private ranges.
+      NGINX_REALIP_TRUSTED_CIDRS: ${NGINX_REALIP_TRUSTED_CIDRS:-""}
     ports:
       - "80:80"
       - "443:443"

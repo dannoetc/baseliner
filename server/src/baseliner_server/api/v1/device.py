@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 # NOTE: dependencies live in api.deps; core.auth only contains the auth logic.
 from baseliner_server.api.deps import get_current_device, get_db
+from baseliner_server.middleware.rate_limit import enforce_device_reports_rate_limit
 from baseliner_server.services.policy_compiler import compile_effective_policy
 from baseliner_server.db.models import Device, LogEvent, Run, RunItem
 from baseliner_server.db.models import StepStatus, RunStatus
@@ -145,7 +146,11 @@ def get_effective_policy(
     return resp
 
 
-@router.post("/device/reports", response_model=SubmitReportResponse)
+@router.post(
+    "/device/reports",
+    response_model=SubmitReportResponse,
+    dependencies=[Depends(enforce_device_reports_rate_limit)],
+)
 def submit_report(
     payload: SubmitReportRequest,
     request: Request,
