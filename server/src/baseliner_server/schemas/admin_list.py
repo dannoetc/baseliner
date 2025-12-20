@@ -14,6 +14,8 @@ class ORMModel(BaseModel):
 
 class RunSummaryLite(ORMModel):
     id: str
+    correlation_id: str | None = None
+
     started_at: datetime | None = None
     ended_at: datetime | None = None
     status: str | None = None
@@ -61,7 +63,6 @@ class DeviceSummary(ORMModel):
 DeviceAdminOut = DeviceSummary
 
 
-
 class DevicesListResponse(ORMModel):
     items: list[DeviceSummary]
     limit: int
@@ -71,6 +72,9 @@ class DevicesListResponse(ORMModel):
 class RunSummary(ORMModel):
     id: str
     device_id: str | None = None
+
+    correlation_id: str | None = None
+
     started_at: datetime | None = None
     ended_at: datetime | None = None
     status: str | None = None

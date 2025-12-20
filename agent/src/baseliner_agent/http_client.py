@@ -38,15 +38,26 @@ def _emit_log(log_fn: LogFn | None, event: dict[str, Any]) -> None:
 
 
 class ApiClient:
-    def __init__(self, base_url: str, device_token: str | None = None, timeout_s: int = 30):
+    def __init__(
+        self,
+        base_url: str,
+        device_token: str | None = None,
+        timeout_s: int = 30,
+        *,
+        correlation_id: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.device_token = device_token
         self.timeout_s = timeout_s
+        self.correlation_id = correlation_id
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, *, correlation_id: str | None = None) -> dict[str, str]:
         h = {"Accept": "application/json"}
         if self.device_token:
             h["Authorization"] = f"Bearer {self.device_token}"
+        cid = correlation_id or self.correlation_id
+        if cid:
+            h["X-Correlation-ID"] = str(cid)
         return h
 
     def _request_json(
@@ -57,6 +68,7 @@ class ApiClient:
         retries: int = 2,
         payload: Any | None = None,
         log_fn: LogFn | None = None,
+        correlation_id: str | None = None,
     ) -> ApiResponse:
         url = f"{self.base_url}{path}"
         last_exc: Exception | None = None
@@ -65,14 +77,21 @@ class ApiClient:
             resp = None
             _emit_log(
                 log_fn,
-                {"level": "info", "event": "http_request", "url": url, "method": method, "attempt": attempt + 1},
+                {
+                    "level": "info",
+                    "event": "http_request",
+                    "url": url,
+                    "method": method,
+                    "attempt": attempt + 1,
+                    "correlation_id": correlation_id or self.correlation_id,
+                },
             )
             try:
                 resp = requests.request(
                     method,
                     url,
                     json=payload,
-                    headers=self._headers(),
+                    headers=self._headers(correlation_id=correlation_id),
                     timeout=self.timeout_s,
                 )
                 request_id = _request_id_from_headers(resp.headers)
@@ -86,6 +105,7 @@ class ApiClient:
                         "attempt": attempt + 1,
                         "status": resp.status_code,
                         "request_id": request_id,
+                        "correlation_id": correlation_id or self.correlation_id,
                     },
                 )
                 resp.raise_for_status()
@@ -108,6 +128,7 @@ class ApiClient:
                         "attempt": attempt + 1,
                         "status": getattr(resp, "status_code", None),
                         "request_id": request_id,
+                        "correlation_id": correlation_id or self.correlation_id,
                         "error": str(e),
                     },
                 )
@@ -119,8 +140,36 @@ class ApiClient:
 
         raise last_exc  # pragma: no cover
 
-    def post_json(self, path: str, payload: Any, retries: int = 2, *, log_fn: LogFn | None = None) -> ApiResponse:
-        return self._request_json("POST", path, payload=payload, retries=retries, log_fn=log_fn)
+    def post_json(
+        self,
+        path: str,
+        payload: Any,
+        retries: int = 2,
+        *,
+        log_fn: LogFn | None = None,
+        correlation_id: str | None = None,
+    ) -> ApiResponse:
+        return self._request_json(
+            "POST",
+            path,
+            payload=payload,
+            retries=retries,
+            log_fn=log_fn,
+            correlation_id=correlation_id,
+        )
 
-    def get_json(self, path: str, retries: int = 2, *, log_fn: LogFn | None = None) -> ApiResponse:
-        return self._request_json("GET", path, retries=retries, log_fn=log_fn)
+    def get_json(
+        self,
+        path: str,
+        retries: int = 2,
+        *,
+        log_fn: LogFn | None = None,
+        correlation_id: str | None = None,
+    ) -> ApiResponse:
+        return self._request_json(
+            "GET",
+            path,
+            retries=retries,
+            log_fn=log_fn,
+            correlation_id=correlation_id,
+        )

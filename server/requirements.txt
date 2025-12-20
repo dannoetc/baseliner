@@ -1,7 +1,6 @@
 alembic==1.14.0
 annotated-types==0.7.0
 anyio==4.12.0
--e git+https://github.com/dannoetc/baseliner.git@87cbe09a7e9ff39b5efdb2fff846f7ed3f251cc4#egg=baseliner_server&subdirectory=server
 certifi==2025.11.12
 click==8.3.1
 colorama==0.4.6
@@ -34,3 +33,4 @@ tzdata==2025.2
 uvicorn==0.32.1
 watchfiles==1.1.1
 websockets==15.0.1
+-e .

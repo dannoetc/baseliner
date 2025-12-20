@@ -335,6 +335,7 @@ def debug_device_bundle(
 
         last_run_summary = RunDebugSummary(
             id=str(last_run.id),
+            correlation_id=last_run.correlation_id,
             started_at=last_run.started_at,
             ended_at=last_run.ended_at,
             status=_status(last_run.status),
@@ -411,6 +412,7 @@ def debug_device_bundle(
     if last_run:
         last_run_summary = RunDebugSummary(
             id=str(last_run.id),
+            correlation_id=last_run.correlation_id,
             started_at=last_run.started_at,
             ended_at=last_run.ended_at,
             status=_status(last_run.status),
@@ -552,6 +554,7 @@ def list_device_runs(
             RunRollup(
                 id=str(r.id),
                 device_id=str(r.device_id),
+                correlation_id=r.correlation_id,
                 started_at=r.started_at,
                 ended_at=r.ended_at,
                 status=_status(r.status),
@@ -658,6 +661,7 @@ def list_devices(
             Run.ended_at.label("ended_at"),
             Run.status.label("status"),
             Run.agent_version.label("agent_version"),
+            Run.correlation_id.label("correlation_id"),
             Run.effective_policy_hash.label("effective_policy_hash"),
             Run.summary.label("summary"),
             func.row_number()
@@ -710,6 +714,7 @@ def list_devices(
 
             last_run_obj = RunSummaryLite(
                 id=str(run_id),
+                correlation_id=m.get("correlation_id"),
                 started_at=started_at,
                 ended_at=ended_at,
                 status=last_run_status,
@@ -797,6 +802,7 @@ def list_runs(
             RunSummary(
                 id=str(r.id),
                 device_id=str(r.device_id),
+                correlation_id=r.correlation_id,
                 started_at=r.started_at,
                 ended_at=r.ended_at,
                 status=_status(r.status),
@@ -831,6 +837,7 @@ def get_run_detail(
     return RunDetailResponse(
         id=str(run.id),
         device_id=str(run.device_id),
+        correlation_id=run.correlation_id,
         started_at=run.started_at,
         ended_at=run.ended_at,
         status=_status(run.status) or "unknown",

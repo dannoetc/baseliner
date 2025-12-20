@@ -23,6 +23,7 @@ class PolicyAssignmentDebugOut(BaseModel):
 
 class RunDebugSummary(BaseModel):
     id: str
+    correlation_id: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
     status: str | None = None

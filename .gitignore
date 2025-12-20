@@ -46,3 +46,7 @@ Thumbs.db
 
 # --- Misc --- 
 agent/out/**
+# --- Env files ---
+.env
+server/.env
+agent/.env

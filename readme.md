@@ -18,37 +18,74 @@ This repo currently contains a working **server MVP** (FastAPI + Postgres) and a
 - `server/` — FastAPI API + Alembic migrations + server package
   - `server/src/baseliner_server/` — Python package (src-layout)
   - `server/alembic/` — Alembic env + migrations
-  - `server/.env` — local dev config (not committed)
+  - `server/.env` — local dev config (not committed; copy from `.env.example`)
 - `agent/` — Windows-focused Baseliner agent scaffold
   - `agent/src/baseliner_agent/` — Agent package + CLI
   - `agent/scripts/` — Helper scripts for local testing
-- `shared/examples/policies/` — example policy documents (JSON)
+- `policies/` — example policy documents (JSON)
 
 ---
 
-## Quick start
+## Quick start (Docker, recommended)
 
-### Server (local dev)
-1. Start Postgres locally (or `docker-compose up -d db`).
+From repo root:
+```bash
+docker compose up --build
+```
+
+This starts **db** (Postgres) + **api** (FastAPI), runs Alembic migrations on startup, and exposes:
+- API: `http://localhost:8000`
+- DB: `localhost:5432`
+
+Windows convenience wrapper:
+```powershell
+.\tools\dev-scripts\Dev-Up.ps1
+```
+
+---
+
+## Server (local dev, without Docker API)
+
+1. Start Postgres only:
+   ```bash
+   docker compose up -d db
+   ```
 2. From `server/`, create a virtual env and install dependencies:
    ```bash
+   cd server
    python -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-3. Create `server/.env` with values for `database_url`, `baseliner_token_pepper`, and `baseliner_admin_key`.
-4. Apply migrations: `alembic upgrade head`.
-5. Run the API: `uvicorn baseliner_server.main:app --reload`.
+3. Copy `server/.env.example` to `server/.env` and adjust values.
+4. Apply migrations:
+   ```bash
+   alembic upgrade head
+   ```
+5. Run the API:
+   ```bash
+   uvicorn baseliner_server.main:app --reload
+   ```
 
-### Agent (Windows dev box)
+---
+
+## Agent (Windows dev box)
+
 1. From `agent/`, create a virtual env and install dependencies:
    ```powershell
+   cd agent
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
    ```
-2. Enroll the device once: `python -m baseliner_agent enroll --server http://localhost:8000 --enroll-token <TOKEN> --device-key MY-DEVICE`.
-3. Execute the policy once and report back: `python -m baseliner_agent run-once --server http://localhost:8000`.
+2. Enroll the device once:
+   ```powershell
+   python -m baseliner_agent enroll --server http://localhost:8000 --enroll-token <TOKEN> --device-key MY-DEVICE
+   ```
+3. Execute the policy once and report back:
+   ```powershell
+   python -m baseliner_agent run-once --server http://localhost:8000
+   ```
 
 ---
 
@@ -72,3 +109,21 @@ This repo currently contains a working **server MVP** (FastAPI + Postgres) and a
 - Windows dev machine (tested) for the agent
 - Python 3.11+ for server + agent tooling
 - Postgres 16 (via Docker or local install) for the server
+
+---
+
+## Dev hygiene (lint/format/typecheck)
+
+Install pre-commit hooks:
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Run checks manually:
+```bash
+ruff format .
+ruff check .
+mypy server/src agent/src
+pytest -q
+```

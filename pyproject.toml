@@ -1,0 +1,38 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  ".git",
+  ".venv",
+  "**/.venv",
+  "**/venv",
+  "**/env",
+  "build",
+  "dist",
+  "agent/out",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "skip"
+check_untyped_defs = false
+warn_unused_ignores = false
+warn_redundant_casts = false
+warn_return_any = false
+no_implicit_optional = false
+show_error_codes = true
+pretty = true
+
+# Avoid failing CI on missing type stubs for now; tighten over time.

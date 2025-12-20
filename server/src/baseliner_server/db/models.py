@@ -207,6 +207,9 @@ class Run(Base):
 
     agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Correlation id for tracing agent/server activity (propagated from X-Correlation-ID)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     # Snapshot of the effective policy used for this run (compiled/merged)
     policy_snapshot: Mapped[dict] = mapped_column(JSON_COL, nullable=False, default=dict)
 
@@ -219,6 +222,7 @@ class Run(Base):
 
     __table_args__ = (
         Index("ix_runs_device_id_started_at", "device_id", "started_at"),
+        Index("ix_runs_correlation_id", "correlation_id"),
     )
 
 

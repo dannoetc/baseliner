@@ -33,6 +33,16 @@ def ensure_run_log_dir(state_dir: str | Path) -> Path:
     return d
 
 
+def ensure_agent_log_dir(state_dir: str | Path) -> Path:
+    d = Path(state_dir) / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def agent_log_path(state_dir: str | Path) -> Path:
+    return ensure_agent_log_dir(state_dir) / "agent.log"
+
+
 def _safe_filename(s: str) -> str:
     # Windows-friendly filename sanitation
     bad = '<>:"/\\|?*'
@@ -51,6 +61,56 @@ def new_run_log_path(state_dir: str | Path, started_at_iso: str, local_run_id: s
     return d / f"{base}__{local_run_id}.jsonl"
 
 
+def _event_to_text_line(event: dict[str, Any]) -> str:
+    """Best-effort one-line log for easy tailing."""
+    ts = str(event.get("ts") or "").strip()
+    lvl = str(event.get("level") or "info").upper()
+
+    # Prefer structured "event" name; fallback to message.
+    name = event.get("event") or event.get("message") or "log"
+    name = str(name).strip()
+
+    # Compact context that is useful when debugging in the field.
+    ctx_parts: list[str] = []
+    for k in (
+        "local_run_id",
+        "correlation_id",
+        "request_id",
+        "server_run_id",
+        "effective_policy_hash",
+        "ordinal",
+        "resource_type",
+        "resource_id",
+        "status",
+    ):
+        v = event.get(k)
+        if v is None:
+            continue
+        s = str(v)
+        if not s:
+            continue
+        ctx_parts.append(f"{k}={s}")
+
+    if event.get("error"):
+        ctx_parts.append(f"error={str(event.get('error'))}")
+
+    # Ensure single-line output (no newlines/tabs)
+    ctx = " ".join(ctx_parts).replace("\n", " ").replace("\r", " ").replace("\t", " ").strip()
+
+    if ts:
+        return f"{ts} {lvl} {name} {ctx}".strip()
+    return f"{lvl} {name} {ctx}".strip()
+
+
+def _append_text(path: Path, line: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
 def log_event(path: Path, event: dict[str, Any]) -> None:
     """
     Append one JSONL record to the run log.
@@ -60,6 +120,15 @@ def log_event(path: Path, event: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+        # Also append a compact, human-readable line to <state_dir>\logs\agent.log.
+        # This is intentionally best-effort and only applies when logging to the run logs directory.
+        # (It keeps existing JSONL files as the source of truth for structured logs.)
+        try:
+            if path.parent.name == "runs" and path.parent.parent.name == "logs":
+                _append_text(path.parent.parent / "agent.log", _event_to_text_line(event))
+        except Exception:
+            pass
     except Exception:
         # Never let logging break the agent.
         pass

@@ -16,5 +16,26 @@ services:
       timeout: 3s
       retries: 20
 
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: baseliner-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Inside compose network, Postgres is reachable at hostname "db".
+      DATABASE_URL: postgresql+psycopg://baseliner:baseliner@db:5432/baseliner
+      BASELINER_TOKEN_PEPPER: change-me-to-a-long-random-string
+      BASELINER_ADMIN_KEY: change-me-too
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    working_dir: /app/server
+    volumes:
+      - ./server:/app/server
+    command: ["bash", "-lc", "alembic upgrade head && uvicorn baseliner_server.main:app --reload --host 0.0.0.0 --port 8000"]
+
 volumes:
   baseliner_pg:

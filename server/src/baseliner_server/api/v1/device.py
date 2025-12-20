@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -148,6 +148,7 @@ def get_effective_policy(
 @router.post("/device/reports", response_model=SubmitReportResponse)
 def submit_report(
     payload: SubmitReportRequest,
+    request: Request,
     device: Device = Depends(get_current_device),
     db: Session = Depends(get_db),
 ) -> SubmitReportResponse:
@@ -185,6 +186,7 @@ def submit_report(
         ended_at=ended_at,
         status=status,
         agent_version=payload.agent_version,
+        correlation_id=getattr(getattr(request, "state", None), "correlation_id", None),
         effective_policy_hash=payload.effective_policy_hash,  # agent sends server hash (or fallback)
         policy_snapshot=snapshot,
         summary=summary,

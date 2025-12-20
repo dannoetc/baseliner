@@ -37,7 +37,7 @@ def _http_log_fn(run_log, local_run_id: str | None) -> LogFn | None:
         return None
 
     def _log(event: dict[str, Any]) -> None:
-        payload = {"ts": utcnow_iso(), "local_run_id": local_run_id, **event}
+        payload = {"ts": utcnow_iso(), "local_run_id": local_run_id, "correlation_id": local_run_id, **event}
         payload.setdefault("level", "info")
         log_event(run_log, payload)
 
@@ -120,7 +120,8 @@ def _compute_observed_state_hash(items: list[dict[str, Any]]) -> str:
 
 def enroll_device(server: str, enroll_token: str, device_key: str, tags: dict[str, Any], state_dir: str) -> None:
     state = AgentState.load(state_dir)
-    client = ApiClient(server)
+    enroll_correlation_id = f"enroll-{uuid.uuid4()}"
+    client = ApiClient(server, correlation_id=enroll_correlation_id)
 
     payload = {
         "enroll_token": enroll_token,
@@ -130,7 +131,7 @@ def enroll_device(server: str, enroll_token: str, device_key: str, tags: dict[st
         "tags": tags or {},
     }
 
-    resp = client.post_json("/api/v1/enroll", payload)
+    resp = client.post_json("/api/v1/enroll", payload, correlation_id=enroll_correlation_id)
     data = resp.data
     state.device_id = data.get("device_id")
     state.device_key = device_key
@@ -150,17 +151,16 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     state = AgentState.load(state_dir)
     state.last_server_url = server
 
-    token = state.load_device_token(state_dir)
-    client = ApiClient(server, device_token=token)
-
     local_run_id = str(uuid.uuid4())
+    token = state.load_device_token(state_dir)
+    client = ApiClient(server, device_token=token, correlation_id=local_run_id)
     started = utcnow_iso()
     run_log = new_run_log_path(state_dir, started, local_run_id)
     http_log = _http_log_fn(run_log, local_run_id)
 
     log_event(run_log, {
         "ts": started, "level": "info", "event": "run_start",
-        "local_run_id": local_run_id, "server": server,
+        "local_run_id": local_run_id, "correlation_id": local_run_id, "server": server,
         "device_id": state.device_id, "device_key": state.device_key,
         "agent_version": state.agent_version, "force": bool(force),
     })
@@ -171,13 +171,13 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     except Exception as e:
         log_event(run_log, {
             "ts": utcnow_iso(), "level": "warning", "event": "queue_flush_failed",
-            "local_run_id": local_run_id, "error": str(e),
+            "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e),
         })
 
     policy_request_id = None
     # Fetch effective policy (MUST NOT hard-crash the whole run)
     try:
-        pol_resp = client.get_json("/api/v1/device/policy", log_fn=http_log)
+        pol_resp = client.get_json("/api/v1/device/policy", log_fn=http_log, correlation_id=local_run_id)
         pol = pol_resp.data
         policy_request_id = pol_resp.request_id
     except Exception as e:
@@ -186,7 +186,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
         log_event(run_log, {
             "ts": ended, "level": "error", "event": "policy_fetch_failed",
-            "local_run_id": local_run_id, "error": err,
+            "local_run_id": local_run_id, "correlation_id": local_run_id, "error": err,
         })
 
         # Update local state + health even though we're offline
@@ -209,12 +209,12 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             path = queue_report(state_dir, _offline_report(state=state, started=started, ended=ended, error=err))
             log_event(run_log, {
                 "ts": utcnow_iso(), "level": "warning", "event": "offline_report_queued",
-                "local_run_id": local_run_id, "queued_path": str(path),
+                "local_run_id": local_run_id, "correlation_id": local_run_id, "queued_path": str(path),
             })
         except Exception as qe:
             log_event(run_log, {
                 "ts": utcnow_iso(), "level": "warning", "event": "offline_report_queue_failed",
-                "local_run_id": local_run_id, "error": str(qe),
+                "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(qe),
             })
 
         print(f"[ERROR] {err}")
@@ -240,6 +240,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "level": "info",
             "event": "policy_fetched",
             "local_run_id": local_run_id,
+            "correlation_id": local_run_id,
             "mode": mode,
             "effective_policy_hash": effective_hash,
             "resources_count": len(resources),
@@ -252,9 +253,11 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
     logs: list[dict[str, Any]] = [
         {
+            "ts": started,
             "level": "info",
             "message": "Run started",
             "data": {
+                "correlation_id": local_run_id,
                 "mode": mode,
                 "resources": len(resources),
                 "no_policy_assigned": bool(no_policy_assigned),
@@ -270,6 +273,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
                 "level": "info",
                 "event": "no_policy_assigned",
                 "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
             },
         )
 
@@ -298,6 +302,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
                 "level": "info" if success else "error",
                 "event": "run_item_result",
                 "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
                 "ordinal": ordinal,
                 "resource_type": item.get("resource_type"),
                 "resource_id": item.get("resource_id"),
@@ -318,7 +323,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "ts": utcnow_iso(),
             "level": "info",
             "message": "Run finished",
-            "data": {"ok": ok, "failed": items_failed, "status": status},
+            "data": {"correlation_id": local_run_id, "ok": ok, "failed": items_failed, "status": status},
         }
     )
 
@@ -344,6 +349,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "level": "info",
             "event": "run_summary",
             "local_run_id": local_run_id,
+            "correlation_id": local_run_id,
             "status": status,
             "ok": ok,
             "items_total": items_total,
@@ -355,6 +361,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     )
 
     report = {
+        "correlation_id": local_run_id,
         "started_at": started,
         "ended_at": ended,
         "status": status,
@@ -391,17 +398,23 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         hp = write_health(state_dir, state=state)
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "health_written", "local_run_id": local_run_id, "path": str(hp)},
+            {"ts": utcnow_iso(), "level": "info", "event": "health_written", "local_run_id": local_run_id, "correlation_id": local_run_id, "path": str(hp)},
         )
     except Exception as e:
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "warning", "event": "health_write_failed", "local_run_id": local_run_id, "error": str(e)},
+            {"ts": utcnow_iso(), "level": "warning", "event": "health_write_failed", "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e)},
         )
 
     # Post report (fallback to queue)
     try:
-        resp = client.post_json("/api/v1/device/reports", report, retries=1, log_fn=http_log)
+        resp = client.post_json(
+            "/api/v1/device/reports",
+            report,
+            retries=1,
+            log_fn=http_log,
+            correlation_id=local_run_id,
+        )
         run_id = resp.data.get("run_id")
         report_request_id = resp.request_id
         print(f"[OK] Posted report run_id={run_id}")
@@ -417,7 +430,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "report_posted", "local_run_id": local_run_id, "server_run_id": run_id, "effective_policy_hash": effective_hash, "request_id": report_request_id},
+            {"ts": utcnow_iso(), "level": "info", "event": "report_posted", "local_run_id": local_run_id, "correlation_id": local_run_id, "server_run_id": run_id, "effective_policy_hash": effective_hash, "request_id": report_request_id},
         )
     except Exception as e:
         mf, mb = queue_limits()
@@ -430,7 +443,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "warning", "event": "report_queued", "local_run_id": local_run_id, "error": str(e), "queued_path": str(path), "effective_policy_hash": effective_hash},
+            {"ts": utcnow_iso(), "level": "warning", "event": "report_queued", "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e), "queued_path": str(path), "effective_policy_hash": effective_hash},
         )
 
         stats2 = prune_queue(state_dir, max_files=mf, max_bytes=mb)
@@ -461,7 +474,7 @@ def _flush_queue(
         if run_log is not None:
             log_event(
                 run_log,
-                {"ts": utcnow_iso(), "level": "warning", "event": "queue_pruned", "local_run_id": local_run_id, "removed_files": stats.get("removed_files"), "removed_bytes": stats.get("removed_bytes")},
+                {"ts": utcnow_iso(), "level": "warning", "event": "queue_pruned", "local_run_id": local_run_id, "correlation_id": local_run_id, "removed_files": stats.get("removed_files"), "removed_bytes": stats.get("removed_bytes")},
             )
 
     queued = iter_queued_reports(state_dir)
@@ -471,7 +484,7 @@ def _flush_queue(
     if run_log is not None:
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_start", "local_run_id": local_run_id, "queued_count": len(queued)},
+            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_start", "local_run_id": local_run_id, "correlation_id": local_run_id, "queued_count": len(queued)},
         )
 
     changed = False
@@ -480,7 +493,13 @@ def _flush_queue(
     for path in queued[:20]:
         try:
             report = json.loads(path.read_text(encoding="utf-8-sig"))
-            client.post_json("/api/v1/device/reports", report, retries=1, log_fn=http_log)
+            client.post_json(
+                "/api/v1/device/reports",
+                report,
+                retries=1,
+                log_fn=http_log,
+                correlation_id=local_run_id,
+            )
             delete_queued(path)
             flushed += 1
             print(f"[OK] Flushed queued report: {path.name}")
@@ -494,14 +513,14 @@ def _flush_queue(
             if run_log is not None:
                 log_event(
                     run_log,
-                    {"ts": utcnow_iso(), "level": "warning", "event": "queue_flush_error", "local_run_id": local_run_id, "error": str(e), "stopped_after_flushed": flushed},
+                    {"ts": utcnow_iso(), "level": "warning", "event": "queue_flush_error", "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e), "stopped_after_flushed": flushed},
                 )
             break
 
     if run_log is not None:
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_end", "local_run_id": local_run_id, "flushed": flushed},
+            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_end", "local_run_id": local_run_id, "correlation_id": local_run_id, "flushed": flushed},
         )
 
     if changed:

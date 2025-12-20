@@ -38,6 +38,10 @@ class LogEventDetail(BaseModel):
 class RunDetailResponse(BaseModel):
     id: str
     device_id: str
+
+    # Correlation id propagated from X-Correlation-ID (agent/server tracing)
+    correlation_id: str | None = None
+
     started_at: datetime
     ended_at: datetime | None = None
     status: str

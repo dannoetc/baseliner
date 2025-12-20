@@ -1,0 +1,113 @@
+# Optional: Nginx + Let's Encrypt (certbot) for TLS
+#
+# This compose override:
+#   - adds an nginx reverse proxy that terminates TLS on 443 and proxies to api:8000
+#   - keeps the API service off host ports (only reachable via nginx)
+#   - runs certbot to obtain/renew a certificate for a domain you specify at compose-time
+#
+# Required env vars (pass via --env-file or environment):
+#   BASELINER_DOMAIN=api.example.com
+#   CERTBOT_EMAIL=you@example.com
+#
+# Bring up (from repo root):
+#   docker compose -f docker-compose.yml -f docker-compose.nginx-certbot.yml up -d --build
+#
+# Notes:
+# - Your domain must resolve to this host and ports 80/443 must be reachable from the internet.
+# - The first issuance happens automatically; nginx reloads periodically to pick up new certs.
+#
+services:
+  api:
+    # Remove host port binding so API is only reachable via nginx
+    ports: []
+    # Trust proxy headers so FastAPI sees correct scheme/client when behind nginx
+    command: ["bash", "-lc", "alembic upgrade head && uvicorn baseliner_server.main:app --reload --proxy-headers --forwarded-allow-ips='*' --host 0.0.0.0 --port 8000"]
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/nginx/Dockerfile
+    container_name: baseliner-nginx
+    depends_on:
+      - api
+      - certbot-bootstrap
+    environment:
+      BASELINER_DOMAIN: ${BASELINER_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/templates:/etc/nginx/templates:ro
+      - ./deploy/nginx/docker-entrypoint.d:/docker-entrypoint.d:ro
+      - certbot_webroot:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    restart: unless-stopped
+
+  # Creates a temporary self-signed cert ONLY if no cert exists yet.
+  # This lets nginx start immediately with HTTPS while certbot performs the first real issuance.
+  certbot-bootstrap:
+    image: certbot/certbot:latest
+    container_name: baseliner-certbot-bootstrap
+    environment:
+      BASELINER_DOMAIN: ${BASELINER_DOMAIN}
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      set -euo pipefail;
+      : "${BASELINER_DOMAIN:?BASELINER_DOMAIN is required}";
+      CERT_DIR="/etc/letsencrypt/live/${BASELINER_DOMAIN}";
+      if [ -f "${CERT_DIR}/fullchain.pem" ] && [ -f "${CERT_DIR}/privkey.pem" ]; then
+        echo "[OK] Existing cert found for ${BASELINER_DOMAIN}";
+        exit 0;
+      fi;
+      echo "[INFO] No cert yet for ${BASELINER_DOMAIN}; generating temporary self-signed cert (bootstrap).";
+      mkdir -p "${CERT_DIR}";
+      openssl req -x509 -nodes -newkey rsa:2048
+        -keyout "${CERT_DIR}/privkey.pem"
+        -out "${CERT_DIR}/fullchain.pem"
+        -days 7
+        -subj "/CN=${BASELINER_DOMAIN}";
+      echo "[OK] Bootstrap cert created at ${CERT_DIR}";
+      exit 0;
+
+  # Obtains and renews certificates. First issuance happens if missing, then it renews every ~12h.
+  certbot:
+    image: certbot/certbot:latest
+    container_name: baseliner-certbot
+    depends_on:
+      - nginx
+    environment:
+      BASELINER_DOMAIN: ${BASELINER_DOMAIN}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL}
+    volumes:
+      - certbot_webroot:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      set -euo pipefail;
+      : "${BASELINER_DOMAIN:?BASELINER_DOMAIN is required}";
+      : "${CERTBOT_EMAIL:?CERTBOT_EMAIL is required}";
+      CERT_DIR="/etc/letsencrypt/live/${BASELINER_DOMAIN}";
+      if [ ! -f "${CERT_DIR}/fullchain.pem" ] || [ ! -f "${CERT_DIR}/privkey.pem" ]; then
+        echo "[INFO] Requesting initial certificate for ${BASELINER_DOMAIN}";
+        certbot certonly --webroot -w /var/www/certbot
+          -d "${BASELINER_DOMAIN}"
+          --email "${CERTBOT_EMAIL}"
+          --agree-tos
+          --no-eff-email
+          --non-interactive;
+        echo "[OK] Initial certificate obtained for ${BASELINER_DOMAIN}";
+      else
+        echo "[OK] Certificate already exists for ${BASELINER_DOMAIN}";
+      fi;
+      echo "[INFO] Starting renewal loop";
+      while :; do
+        certbot renew --webroot -w /var/www/certbot --quiet || true;
+        sleep 12h;
+      done
+
+volumes:
+  letsencrypt:
+  certbot_webroot:

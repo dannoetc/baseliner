@@ -15,6 +15,9 @@ class ORMModel(BaseModel):
 class RunRollup(ORMModel):
     id: str
     device_id: str
+
+    correlation_id: str | None = None
+
     started_at: datetime | None = None
     ended_at: datetime | None = None
     status: str | None = None

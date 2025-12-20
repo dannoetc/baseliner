@@ -6,6 +6,15 @@ FastAPI-based API that handles device enrollment, policy management, effective p
 - Python 3.11+
 - Postgres 16 (local install or Docker)
 
+## Docker compose
+
+From repo root:
+```bash
+docker compose up --build
+```
+
+This starts Postgres + the API and runs migrations automatically.
+
 ## Local development
 
 1. **Create a virtual environment and install dependencies**
@@ -17,11 +26,11 @@ FastAPI-based API that handles device enrollment, policy management, effective p
    ```
 
 2. **Configure environment**
-   Create `server/.env` with:
+   Copy `server/.env.example` to `server/.env` and adjust:
    ```
-   database_url=postgresql+psycopg://baseliner:baseliner@localhost:5432/baseliner
-   baseliner_token_pepper=<random-string>
-   baseliner_admin_key=<admin-api-key>
+   DATABASE_URL=postgresql+psycopg://baseliner:baseliner@localhost:5432/baseliner
+   BASELINER_TOKEN_PEPPER=<random-string>
+   BASELINER_ADMIN_KEY=<admin-api-key>
    ```
 
 3. **Run database migrations**
@@ -39,13 +48,6 @@ FastAPI-based API that handles device enrollment, policy management, effective p
 - `src/baseliner_server/` — FastAPI app, routers, schemas, and services
 - `alembic/` — migration environment and revision scripts
 - `baseliner-debug/` — sample debug payloads used during development
-
-## Admin devices endpoint
-
-`GET /api/v1/admin/devices` always returns the most recent run (`last_run`) for each
-device and basic health metadata derived from `last_seen_at` and the most recent run.
-The `include_health` query parameter still exists for backward compatibility, but even
-when it is `false` clients can rely on the response including these fields.
 
 ## Running tests
 ```bash

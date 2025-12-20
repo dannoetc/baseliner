@@ -13,6 +13,11 @@ from alembic import context
 # access to the values within the .ini file in use.
 config = context.config
 
+# Allow overriding sqlalchemy.url via env (useful for docker compose / CI)
+_db_url = (os.environ.get("DATABASE_URL") or os.environ.get("database_url"))
+if _db_url:
+    config.set_main_option("sqlalchemy.url", _db_url)
+
 BASE_DIR = Path(__file__).resolve().parents[1]   # .../server
 SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
@@ -36,6 +41,7 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+
 
 
 def run_migrations_offline() -> None:

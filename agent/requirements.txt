@@ -1,1 +1,4 @@
-requests>=2.31.0
+# Dev/test convenience requirements for the agent.
+# The agent is src-layout, so install the package in editable mode.
+-e .
+pytest==9.0.2

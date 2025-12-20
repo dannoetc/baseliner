@@ -13,6 +13,7 @@ from .state import default_state_dir, AgentState
 from .config import load_config, default_config_path, merge_tags
 from .winget import configure_winget
 from .agent_health import build_health, write_health
+from .support_bundle import create_support_bundle, default_bundle_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -106,19 +107,43 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_loop.add_argument("--force", action="store_true", help="Run even if effectivePolicyHash unchanged")
 
+    # SUPPORT-BUNDLE
+    p_sb = sub.add_parser(
+        "support-bundle",
+        help="Create a zip support bundle for troubleshooting (logs/state/redacted config)",
+    )
+    p_sb.add_argument(
+        "--out",
+        default="",
+        help="Output zip path (default: <state-dir>\\support-bundle-<host>-<timestamp>.zip)",
+    )
+    p_sb.add_argument(
+        "--since-hours",
+        type=int,
+        default=24,
+        help="Include run logs / queued reports modified within the last N hours (default: %(default)s)",
+    )
+    p_sb.add_argument(
+        "--max-run-logs",
+        type=int,
+        default=50,
+        help="Max number of per-run JSONL logs to include (default: %(default)s)",
+    )
+    p_sb.add_argument(
+        "--no-queue",
+        action="store_true",
+        help="Exclude queued reports from the bundle",
+    )
+
     args = parser.parse_args(argv)
     state_dir = os.path.abspath(args.state_dir)
 
     try:
         if args.cmd == "config" and args.config_cmd == "show":
-            # Re-load config based on the resolved --config (in case user passed it after pre-parse)
             cfg2 = load_config(Path(args.config).expanduser())
             if not cfg2.state_dir:
                 cfg2.state_dir = str(default_state_dir())
-
-            # Keep winget configured consistently with what we're showing.
             configure_winget(getattr(cfg2, "winget_path", None))
-
             print(json.dumps(_redact_config_for_print(cfg2), indent=2, sort_keys=True))
             return 0
 
@@ -136,7 +161,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "enroll":
             tags_cli = _parse_tags(args.tags)
             tags = merge_tags(cfg.tags, tags_cli)
-
             enroll_device(
                 server=args.server,
                 enroll_token=args.enroll_token,
@@ -159,6 +183,26 @@ def main(argv: list[str] | None = None) -> int:
                 sleep_s = _sleep_with_jitter(interval, jitter)
                 print(f"[OK] Sleeping {sleep_s}s")
                 time.sleep(sleep_s)
+
+        if args.cmd == "support-bundle":
+            cfg2 = load_config(Path(args.config).expanduser())
+            if not cfg2.state_dir:
+                cfg2.state_dir = str(default_state_dir())
+
+            out_path = args.out.strip() or ""
+            out = Path(out_path).expanduser() if out_path else default_bundle_path(state_dir)
+
+            bundle = create_support_bundle(
+                state_dir=state_dir,
+                out_path=str(out),
+                since_hours=int(args.since_hours),
+                max_run_logs=int(args.max_run_logs),
+                include_queue=(not bool(args.no_queue)),
+                include_config_redacted=_redact_config_for_print(cfg2),
+                winget_path_hint=getattr(cfg2, "winget_path", None),
+            )
+            print(str(bundle))
+            return 0
 
         parser.print_help()
         return 2
