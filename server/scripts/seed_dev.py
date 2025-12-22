@@ -23,6 +23,16 @@ Usage (from repo root):
   # Assign a policy to a device (by device_key)
   python server/scripts/seed_dev.py assign-policy --device-key DESKTOP-FTVVO4A --policy-name baseliner-windows-core
 
+
+# Restore a soft-deleted device (mints a new device token)
+python server/scripts/seed_dev.py restore-device --device-id <device_uuid>
+
+# Revoke/rotate a device token (mints a new device token)
+python server/scripts/seed_dev.py revoke-device-token --device-id <device_uuid>
+
+# List newest admin audit events
+python server/scripts/seed_dev.py audit --limit 20
+
 Notes:
 - Global args like --server/--admin-key/--timeout are accepted either BEFORE or AFTER the subcommand.
   (We normalize argv to make this forgiving.)
@@ -40,6 +50,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
+
 
 DEFAULT_SERVER = "http://localhost:8000"
 DEFAULT_POLICY_FILE = "policies/baseliner-windows-core.json"
@@ -94,9 +105,7 @@ def _raise_for_status(resp: httpx.Response) -> None:
             payload = resp.json()
         except Exception:
             payload = resp.text
-        raise RuntimeError(
-            f"HTTP {resp.status_code} {resp.request.method} {resp.request.url}\n{payload}"
-        ) from None
+        raise RuntimeError(f"HTTP {resp.status_code} {resp.request.method} {resp.request.url}\n{payload}") from None
 
 
 def create_enroll_token(
@@ -128,9 +137,7 @@ def upsert_policy(ctx: Ctx, *, policy_file: Path) -> dict[str, Any]:
     required = ["name", "schema_version", "is_active", "document"]
     missing = [k for k in required if k not in payload]
     if missing:
-        raise RuntimeError(
-            f"Policy file missing keys: {missing}. Expected {required} (+ optional description)."
-        )
+        raise RuntimeError(f"Policy file missing keys: {missing}. Expected {required} (+ optional description).")
 
     with _client(ctx) as c:
         r = c.post("/api/v1/admin/policies", json=payload)
@@ -140,9 +147,7 @@ def upsert_policy(ctx: Ctx, *, policy_file: Path) -> dict[str, Any]:
 
 def _find_device_id_by_key(ctx: Ctx, *, device_key: str, limit: int = 500) -> str:
     with _client(ctx) as c:
-        r = c.get(
-            "/api/v1/admin/devices", params={"limit": limit, "offset": 0, "include_health": "false"}
-        )
+        r = c.get("/api/v1/admin/devices", params={"limit": limit, "offset": 0, "include_health": "false"})
         _raise_for_status(r)
         data = r.json()
 
@@ -172,14 +177,50 @@ def assign_policy(
     with _client(ctx) as c:
         r = c.post("/api/v1/admin/assign-policy", json=payload)
         _raise_for_status(r)
-        return {
-            "ok": True,
-            "device_id": device_id,
-            "policy_name": policy_name,
-            "mode": mode,
-            "priority": int(priority),
-        }
+        return {"ok": True, "device_id": device_id, "policy_name": policy_name, "mode": mode, "priority": int(priority)}
 
+
+
+def restore_device(ctx: Ctx, *, device_id: str) -> dict[str, Any]:
+    """Restore (reactivate) a soft-deleted device and mint a new device token."""
+    with _client(ctx) as c:
+        r = c.post(f"/api/v1/admin/devices/{device_id}/restore")
+        _raise_for_status(r)
+        return r.json()
+
+
+def revoke_device_token(ctx: Ctx, *, device_id: str) -> dict[str, Any]:
+    """Revoke the current device token and mint a new one."""
+    with _client(ctx) as c:
+        r = c.post(f"/api/v1/admin/devices/{device_id}/revoke-token")
+        _raise_for_status(r)
+        return r.json()
+
+
+def list_audit_events(
+    ctx: Ctx,
+    *,
+    limit: int = 20,
+    cursor: str | None = None,
+    action: str | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+) -> dict[str, Any]:
+    """List admin audit events (newest first)."""
+    params: dict[str, Any] = {"limit": int(limit)}
+    if cursor:
+        params["cursor"] = cursor
+    if action:
+        params["action"] = action
+    if target_type:
+        params["target_type"] = target_type
+    if target_id:
+        params["target_id"] = target_id
+
+    with _client(ctx) as c:
+        r = c.get("/api/v1/admin/audit", params=params)
+        _raise_for_status(r)
+        return r.json()
 
 def _print_json(obj: Any) -> None:
     print(json.dumps(obj, indent=2, sort_keys=True))
@@ -190,25 +231,14 @@ def cmd_seed(args: argparse.Namespace) -> int:
     out: dict[str, Any] = {"server": ctx.server}
 
     if args.create_token:
-        tok = create_enroll_token(
-            ctx,
-            expires_at=args.expires_at or None,
-            expires_hours=args.expires_hours,
-            note=args.note,
-        )
+        tok = create_enroll_token(ctx, expires_at=args.expires_at or None, expires_hours=args.expires_hours, note=args.note)
         out["enroll_token"] = tok
 
     pol = upsert_policy(ctx, policy_file=Path(args.policy_file))
     out["policy"] = pol
 
     if args.device_key:
-        asg = assign_policy(
-            ctx,
-            device_key=args.device_key,
-            policy_name=args.policy_name,
-            mode=args.mode,
-            priority=int(args.priority),
-        )
+        asg = assign_policy(ctx, device_key=args.device_key, policy_name=args.policy_name, mode=args.mode, priority=int(args.priority))
         out["assignment"] = asg
     else:
         out["assignment"] = None
@@ -220,9 +250,7 @@ def cmd_seed(args: argparse.Namespace) -> int:
 
 def cmd_create_token(args: argparse.Namespace) -> int:
     ctx = Ctx(server=args.server, admin_key=args.admin_key, timeout_s=float(args.timeout))
-    tok = create_enroll_token(
-        ctx, expires_at=args.expires_at or None, expires_hours=args.expires_hours, note=args.note
-    )
+    tok = create_enroll_token(ctx, expires_at=args.expires_at or None, expires_hours=args.expires_hours, note=args.note)
     _print_json(tok)
     return 0
 
@@ -236,21 +264,42 @@ def cmd_upsert_policy(args: argparse.Namespace) -> int:
 
 def cmd_assign_policy(args: argparse.Namespace) -> int:
     ctx = Ctx(server=args.server, admin_key=args.admin_key, timeout_s=float(args.timeout))
-    res = assign_policy(
+    res = assign_policy(ctx, device_key=args.device_key, policy_name=args.policy_name, mode=args.mode, priority=int(args.priority))
+    _print_json(res)
+    return 0
+
+
+
+def cmd_restore_device(args: argparse.Namespace) -> int:
+    ctx = Ctx(server=args.server, admin_key=args.admin_key, timeout_s=float(args.timeout))
+    res = restore_device(ctx, device_id=str(args.device_id))
+    _print_json(res)
+    return 0
+
+
+def cmd_revoke_device_token(args: argparse.Namespace) -> int:
+    ctx = Ctx(server=args.server, admin_key=args.admin_key, timeout_s=float(args.timeout))
+    res = revoke_device_token(ctx, device_id=str(args.device_id))
+    _print_json(res)
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    ctx = Ctx(server=args.server, admin_key=args.admin_key, timeout_s=float(args.timeout))
+    res = list_audit_events(
         ctx,
-        device_key=args.device_key,
-        policy_name=args.policy_name,
-        mode=args.mode,
-        priority=int(args.priority),
+        limit=int(args.limit),
+        cursor=args.cursor or None,
+        action=args.action or None,
+        target_type=args.target_type or None,
+        target_id=args.target_id or None,
     )
     _print_json(res)
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="seed_dev", description="Baseliner server dev seeding utilities (Issue #27)"
-    )
+    p = argparse.ArgumentParser(prog="seed_dev", description="Baseliner server dev seeding utilities (Issue #27)")
     p.add_argument(
         "--server",
         default=os.environ.get("BASELINER_SERVER_URL", DEFAULT_SERVER),
@@ -265,60 +314,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser(
-        "seed",
-        help="One-shot: optionally create token + upsert policy + optionally assign to device",
-    )
-    s.add_argument(
-        "--create-token", action="store_true", help="Also create an enrollment token and print it"
-    )
+    s = sub.add_parser("seed", help="One-shot: optionally create token + upsert policy + optionally assign to device")
+    s.add_argument("--create-token", action="store_true", help="Also create an enrollment token and print it")
     s.add_argument("--expires-at", default="", help="Enroll token expires_at ISO8601 (optional)")
-    s.add_argument(
-        "--expires-hours",
-        type=int,
-        default=24,
-        help="Enroll token TTL in hours if --expires-at not set (default: 24)",
-    )
-    s.add_argument(
-        "--note", default="dev seed token", help="Optional note attached to the enroll token"
-    )
-    s.add_argument(
-        "--policy-file",
-        default=DEFAULT_POLICY_FILE,
-        help=f"Policy JSON file to upsert (default: {DEFAULT_POLICY_FILE})",
-    )
-    s.add_argument(
-        "--policy-name",
-        default=DEFAULT_POLICY_NAME,
-        help=f"Policy name to assign (default: {DEFAULT_POLICY_NAME})",
-    )
-    s.add_argument(
-        "--device-key",
-        default="",
-        help="Device key to assign policy to (optional; requires device already enrolled)",
-    )
-    s.add_argument(
-        "--mode",
-        default="enforce",
-        choices=["enforce", "audit"],
-        help="Assignment mode (default: enforce)",
-    )
-    s.add_argument(
-        "--priority",
-        type=int,
-        default=DEFAULT_PRIORITY,
-        help=f"Assignment priority (default: {DEFAULT_PRIORITY})",
-    )
+    s.add_argument("--expires-hours", type=int, default=24, help="Enroll token TTL in hours if --expires-at not set (default: 24)")
+    s.add_argument("--note", default="dev seed token", help="Optional note attached to the enroll token")
+    s.add_argument("--policy-file", default=DEFAULT_POLICY_FILE, help=f"Policy JSON file to upsert (default: {DEFAULT_POLICY_FILE})")
+    s.add_argument("--policy-name", default=DEFAULT_POLICY_NAME, help=f"Policy name to assign (default: {DEFAULT_POLICY_NAME})")
+    s.add_argument("--device-key", default="", help="Device key to assign policy to (optional; requires device already enrolled)")
+    s.add_argument("--mode", default="enforce", choices=["enforce", "audit"], help="Assignment mode (default: enforce)")
+    s.add_argument("--priority", type=int, default=DEFAULT_PRIORITY, help=f"Assignment priority (default: {DEFAULT_PRIORITY})")
     s.set_defaults(func=cmd_seed)
 
     t = sub.add_parser("create-enroll-token", help="Create a one-time enrollment token")
     t.add_argument("--expires-at", default="", help="expires_at ISO8601 (optional)")
-    t.add_argument(
-        "--expires-hours",
-        type=int,
-        default=24,
-        help="TTL in hours if --expires-at not set (default: 24)",
-    )
+    t.add_argument("--expires-hours", type=int, default=24, help="TTL in hours if --expires-at not set (default: 24)")
     t.add_argument("--note", default="dev token", help="Optional note")
     t.set_defaults(func=cmd_create_token)
 
@@ -326,27 +336,28 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--file", required=True, help="Path to policy JSON file (see ./policies/)")
     u.set_defaults(func=cmd_upsert_policy)
 
-    a = sub.add_parser(
-        "assign-policy", help="Assign an existing policy to a device (by device_key)"
-    )
+    a = sub.add_parser("assign-policy", help="Assign an existing policy to a device (by device_key)")
     a.add_argument("--device-key", required=True, help="Device key (must already be enrolled)")
     a.add_argument("--policy-name", required=True, help="Policy name (must exist / be active)")
-    a.add_argument(
-        "--mode",
-        default="enforce",
-        choices=["enforce", "audit"],
-        help="Assignment mode (default: enforce)",
-    )
-    a.add_argument(
-        "--priority",
-        type=int,
-        default=DEFAULT_PRIORITY,
-        help=f"Assignment priority (default: {DEFAULT_PRIORITY})",
-    )
+    a.add_argument("--mode", default="enforce", choices=["enforce", "audit"], help="Assignment mode (default: enforce)")
+    a.add_argument("--priority", type=int, default=DEFAULT_PRIORITY, help=f"Assignment priority (default: {DEFAULT_PRIORITY})")
     a.set_defaults(func=cmd_assign_policy)
 
-    return p
+    r = sub.add_parser("restore-device", help="Restore a soft-deleted device and mint a new device token")
+    r.add_argument("--device-id", required=True, help="Device UUID to restore")
+    r.set_defaults(func=cmd_restore_device)
 
+    v = sub.add_parser("revoke-device-token", help="Revoke a device token and mint a new token")
+    v.add_argument("--device-id", required=True, help="Device UUID to revoke/rotate token for")
+    v.set_defaults(func=cmd_revoke_device_token)
+
+    au = sub.add_parser("audit", help="List admin audit events (newest first)")
+    au.add_argument("--limit", type=int, default=20, help="Max events to return (default: 20)")
+    au.add_argument("--cursor", default="", help="Pagination cursor (from a previous response)")
+    au.add_argument("--action", default="", help="Filter by action (e.g., device.delete)")
+    au.add_argument("--target-type", default="", help="Filter by target_type (e.g., device, policy)")
+    au.add_argument("--target-id", default="", help="Filter by target_id (UUID or string id)")
+    au.set_defaults(func=cmd_audit)
 
 _GLOBAL_FLAGS_WITH_VALUE = {"--server", "--admin-key", "--timeout"}
 
@@ -391,9 +402,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = p.parse_args(argv2)
 
     if not args.admin_key:
-        print(
-            "ERROR: admin key missing. Set --admin-key or env BASELINER_ADMIN_KEY.", file=sys.stderr
-        )
+        print("ERROR: admin key missing. Set --admin-key or env BASELINER_ADMIN_KEY.", file=sys.stderr)
         return 2
 
     try:

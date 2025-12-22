@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "baseliner-admin-cli"
+version = "0.1.0"
+description = "Baseliner admin CLI (operator/developer tool)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.27.0",
+  "rich>=13.7.0",
+  "typer>=0.12.0",
+]
+
+[project.scripts]
+baseliner-admin = "baseliner_admin.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
