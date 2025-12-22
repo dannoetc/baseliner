@@ -1133,14 +1133,14 @@ def get_run_detail(
         ],
         logs=[
             LogEventDetail(
-                id=str(l.id),
-                ts=l.ts,
-                level=_status(l.level) or "info",
-                message=l.message,
-                data=l.data or {},
-                run_item_id=str(l.run_item_id) if l.run_item_id else None,
+                id=str(log_event.id),
+                ts=log_event.ts,
+                level=_status(log_event.level) or "info",
+                message=log_event.message,
+                data=log_event.data or {},
+                run_item_id=str(log_event.run_item_id) if log_event.run_item_id else None,
             )
-            for l in logs
+            for log_event in logs
         ],
     )
 
