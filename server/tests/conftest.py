@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from baseliner_server.main import app
-from baseliner_server.api.deps import get_db, require_admin
+from baseliner_server.api.deps import get_db, require_admin, require_admin_actor
 from baseliner_server.db.base import Base
 
 
@@ -71,8 +71,12 @@ def client(db_engine) -> Generator[TestClient, None, None]:
     def _require_admin_override():
         return True
 
+    def _require_admin_actor_override():
+        return "test-admin"
+
     app.dependency_overrides[get_db] = _get_db_override
     app.dependency_overrides[require_admin] = _require_admin_override
+    app.dependency_overrides[require_admin_actor] = _require_admin_actor_override
 
     try:
         yield TestClient(app)

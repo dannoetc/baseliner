@@ -8,8 +8,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from baseliner_server.core.config import settings
-from baseliner_server.db.models import Device, DeviceStatus
 from baseliner_server.db.session import SessionLocal
+from baseliner_server.db.models import Device, DeviceStatus
 
 
 def utcnow() -> datetime:
@@ -17,28 +17,13 @@ def utcnow() -> datetime:
 
 
 def hash_token(token: str) -> str:
-    """Deterministic token hash with a server-side pepper.
-
-    We never store raw device/enroll tokens.
-    """
-
+    # Simple deterministic hash with server-side pepper (do NOT store raw tokens)
     msg = (settings.baseliner_token_pepper + token).encode("utf-8")
     return hashlib.sha256(msg).hexdigest()
 
 
 def verify_token(token: str, token_hash: str) -> bool:
     return hmac.compare_digest(hash_token(token), token_hash)
-
-
-def hash_admin_key(admin_key: str) -> str:
-    """Hash an admin key for audit logging.
-
-    We reuse baseliner_token_pepper and add a domain separator so admin key hashes
-    cannot collide with token hashes.
-    """
-
-    msg = (settings.baseliner_token_pepper + "admin:" + admin_key).encode("utf-8")
-    return hashlib.sha256(msg).hexdigest()
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -58,14 +43,6 @@ def get_bearer_token(authorization: Optional[str] = Header(default=None)) -> str
 def require_admin(x_admin_key: Optional[str] = Header(default=None)) -> None:
     if not x_admin_key or not hmac.compare_digest(x_admin_key, settings.baseliner_admin_key):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
-
-
-def require_admin_actor(x_admin_key: Optional[str] = Header(default=None)) -> str:
-    """Validate admin key and return a stable actor id for auditing."""
-
-    if not x_admin_key or not hmac.compare_digest(x_admin_key, settings.baseliner_admin_key):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
-    return hash_admin_key(x_admin_key)
 
 
 def get_current_device(
@@ -92,8 +69,7 @@ def get_current_device(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device deactivated")
 
     # Token revocation gate. If the presented token matches the revoked hash, we always block.
-    # NOTE: token_revoked_at is informational and should not block *new* tokens minted after a revoke.
-    if device.revoked_auth_token_hash == token_h:
+    if device.token_revoked_at is not None or device.revoked_auth_token_hash == token_h:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token revoked")
 
     device.last_seen_at = utcnow()

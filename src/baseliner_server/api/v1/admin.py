@@ -1,24 +1,22 @@
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from starlette.requests import Request
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from baseliner_server.services.policy_compiler import compile_effective_policy
 from baseliner_server.core.policy_validation import PolicyDocValidationError, validate_and_normalize_document
 from baseliner_server.schemas.device_runs import DeviceRunsResponse, RunRollup
 from baseliner_server.schemas.maintenance import PruneRequest, PruneResponse, PruneCounts
+from baseliner_server.core.policy_validation import PolicyDocValidationError, validate_and_normalize_document
 
-from baseliner_server.api.deps import get_db, hash_token, require_admin, require_admin_actor
+from baseliner_server.api.deps import get_db, hash_token, require_admin
 from baseliner_server.db.models import (
     AssignmentMode,
     Device,
     DeviceStatus,
-    AuditLog,
     EnrollToken,
     LogEvent,
     Policy,
@@ -34,8 +32,6 @@ from baseliner_server.schemas.admin import (
     DeviceAssignmentsResponse,
     ClearAssignmentsResponse,
     DeleteDeviceResponse,
-    RestoreDeviceResponse,
-    RevokeDeviceTokenResponse,
     PolicyAssignmentOut,
     DeviceDebugResponse,
     PolicyAssignmentDebugOut,
@@ -50,9 +46,6 @@ from baseliner_server.schemas.admin_list import (
 from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.policy_admin import UpsertPolicyRequest, UpsertPolicyResponse
 from baseliner_server.schemas.run_detail import RunDetailResponse, RunItemDetail, LogEventDetail
-from baseliner_server.schemas.audit import AuditEvent, AuditListResponse
-from baseliner_server.services.audit import emit_admin_audit
-
 
 router = APIRouter(tags=["admin"])
 
@@ -97,13 +90,9 @@ def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
 @router.post(
     "/admin/enroll-tokens",
     response_model=CreateEnrollTokenResponse,
+    dependencies=[Depends(require_admin)],
 )
-def create_enroll_token(
-    request: Request,
-    payload: CreateEnrollTokenRequest,
-    admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
-) -> CreateEnrollTokenResponse:
+def create_enroll_token(payload: CreateEnrollTokenRequest, db: Session = Depends(get_db)) -> CreateEnrollTokenResponse:
     raw = secrets.token_urlsafe(24)
     tok = EnrollToken(
         token_hash=hash_token(raw),
@@ -113,21 +102,6 @@ def create_enroll_token(
         note=payload.note,
     )
     db.add(tok)
-    db.flush()
-
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="enroll_token.create",
-        target_type="enroll_token",
-        target_id=str(tok.id),
-        data={
-            "expires_at": payload.expires_at.isoformat() if payload.expires_at else None,
-            "note": payload.note,
-        },
-    )
-
     db.commit()
     return CreateEnrollTokenResponse(enroll_token=raw, expires_at=payload.expires_at)
 
@@ -135,13 +109,9 @@ def create_enroll_token(
 @router.post(
     "/admin/assign-policy",
     response_model=AssignPolicyResponse,
+    dependencies=[Depends(require_admin)],
 )
-def assign_policy(
-    request: Request,
-    payload: AssignPolicyRequest,
-    admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
-) -> AssignPolicyResponse:
+def assign_policy(payload: AssignPolicyRequest, db: Session = Depends(get_db)) -> AssignPolicyResponse:
     device = db.scalar(select(Device).where(Device.id == payload.device_id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -161,14 +131,11 @@ def assign_policy(
             PolicyAssignment.policy_id == policy.id,
         )
     )
-
-    created = False
     if existing:
         existing.mode = mode
         existing.priority = payload.priority
         db.add(existing)
     else:
-        created = True
         db.add(
             PolicyAssignment(
                 device_id=device.id,
@@ -177,22 +144,6 @@ def assign_policy(
                 priority=payload.priority,
             )
         )
-
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="assignment.set",
-        target_type="device",
-        target_id=str(device.id),
-        data={
-            "policy_id": str(policy.id),
-            "policy_name": policy.name,
-            "mode": _status(mode) or str(mode),
-            "priority": int(payload.priority),
-            "created": created,
-        },
-    )
 
     db.commit()
     return AssignPolicyResponse(ok=True)
@@ -204,7 +155,7 @@ def assign_policy(
     dependencies=[Depends(require_admin)],
 )
 def list_device_assignments(
-    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    device_id: str = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
 ) -> DeviceAssignmentsResponse:
     """Return the current policy assignments for a device (admin/debug helper)."""
@@ -239,17 +190,16 @@ def list_device_assignments(
             )
         )
 
-    return DeviceAssignmentsResponse(device_id=str(device_id), assignments=out)
+    return DeviceAssignmentsResponse(device_id=device_id, assignments=out)
 
 
 @router.delete(
     "/admin/devices/{device_id}/assignments",
     response_model=ClearAssignmentsResponse,
+    dependencies=[Depends(require_admin)],
 )
 def clear_device_assignments(
-    request: Request,
-    device_id: uuid.UUID = Path(..., description="Device UUID"),
-    admin_actor: str = Depends(require_admin_actor),
+    device_id: str = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
 ) -> ClearAssignmentsResponse:
     """Remove all policy assignments for a device (admin/debug helper)."""
@@ -263,30 +213,18 @@ def clear_device_assignments(
         .filter(PolicyAssignment.device_id == device.id)
         .delete(synchronize_session=False)
     )
-
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="assignment.clear",
-        target_type="device",
-        target_id=str(device.id),
-        data={"removed": int(removed or 0)},
-    )
-
     db.commit()
-    return ClearAssignmentsResponse(device_id=str(device_id), removed=int(removed or 0))
+    return ClearAssignmentsResponse(device_id=device_id, removed=int(removed or 0))
 
 
 @router.delete(
     "/admin/devices/{device_id}",
     response_model=DeleteDeviceResponse,
+    dependencies=[Depends(require_admin)],
 )
 def delete_device(
-    request: Request,
-    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    device_id: str = Path(..., description="Device UUID"),
     reason: str | None = Query(None, description="Optional deletion reason (stored for audit/debug)"),
-    admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> DeleteDeviceResponse:
     """Soft-delete (deactivate) a device and revoke its current device token.
@@ -319,6 +257,8 @@ def delete_device(
         # old (already revoked) token to this device for a clear 403.
         if reason and not device.deleted_reason:
             device.deleted_reason = reason
+        db.add(device)
+        db.commit()
     else:
         now = utcnow()
 
@@ -333,22 +273,8 @@ def delete_device(
         device.deleted_at = now
         device.deleted_reason = reason
 
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="device.delete",
-        target_type="device",
-        target_id=str(device.id),
-        data={
-            "already_deleted": bool(already_deleted),
-            "reason": reason,
-            "assignments_removed": int(removed or 0),
-        },
-    )
-
-    db.add(device)
-    db.commit()
+        db.add(device)
+        db.commit()
 
     return DeleteDeviceResponse(
         device_id=str(device.id),
@@ -360,107 +286,13 @@ def delete_device(
     )
 
 
-@router.post(
-    "/admin/devices/{device_id}/restore",
-    response_model=RestoreDeviceResponse,
-)
-def restore_device(
-    request: Request,
-    device_id: uuid.UUID = Path(..., description="Device UUID"),
-    admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
-) -> RestoreDeviceResponse:
-    """Restore a soft-deleted device (reactivate) and mint a fresh device token."""
-
-    device = db.scalar(select(Device).where(Device.id == device_id))
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    if device.status == DeviceStatus.active:
-        raise HTTPException(status_code=409, detail="Device is already active")
-
-    now = utcnow()
-    new_token = secrets.token_urlsafe(32)
-    device.auth_token_hash = hash_token(new_token)
-    device.status = DeviceStatus.active
-    device.deleted_at = None
-    device.deleted_reason = None
-
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="device.restore",
-        target_type="device",
-        target_id=str(device.id),
-        data={},
-    )
-
-    db.add(device)
-    db.commit()
-
-    return RestoreDeviceResponse(
-        device_id=str(device.id),
-        status=device.status.value if hasattr(device.status, "value") else str(device.status),
-        restored_at=now,
-        device_token=new_token,
-    )
-
-
-@router.post(
-    "/admin/devices/{device_id}/revoke-token",
-    response_model=RevokeDeviceTokenResponse,
-)
-def revoke_device_token(
-    request: Request,
-    device_id: uuid.UUID = Path(..., description="Device UUID"),
-    admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
-) -> RevokeDeviceTokenResponse:
-    """Revoke the current device token and mint a new one."""
-
-    device = db.scalar(select(Device).where(Device.id == device_id))
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    if device.status != DeviceStatus.active:
-        raise HTTPException(status_code=409, detail="Device is deactivated")
-
-    now = utcnow()
-    new_token = secrets.token_urlsafe(32)
-
-    device.revoked_auth_token_hash = device.auth_token_hash
-    device.token_revoked_at = now
-    device.auth_token_hash = hash_token(new_token)
-
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="device.revoke_token",
-        target_type="device",
-        target_id=str(device.id),
-        data={},
-    )
-
-    db.add(device)
-    db.commit()
-
-    return RevokeDeviceTokenResponse(
-        device_id=str(device.id),
-        status=device.status.value if hasattr(device.status, "value") else str(device.status),
-        token_revoked_at=now,
-        device_token=new_token,
-    )
-
-
 @router.get(
     "/admin/devices/{device_id}/debug",
     response_model=DeviceDebugResponse,
     dependencies=[Depends(require_admin)],
 )
 def debug_device_bundle(
-    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    device_id: str = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
 ) -> DeviceDebugResponse:
     """First-class "debug this device" bundle for operator workflow.
@@ -618,13 +450,120 @@ def debug_device_bundle(
     )
 
 
+    assignments_out: list[PolicyAssignmentDebugOut] = []
+    for a, pol in rows:
+        assignments_out.append(
+            PolicyAssignmentDebugOut(
+                assignment_id=str(a.id),
+                created_at=a.created_at,
+                policy_id=str(a.policy_id),
+                policy_name=pol.name,
+                priority=int(a.priority),
+                mode=_status(a.mode) or "enforce",
+                is_active=bool(pol.is_active),
+            )
+        )
+
+    # Effective policy (compiled)
+    snap = compile_effective_policy(db, device)
+    effective_policy = EffectivePolicyResponse(
+        policy_id=None,
+        policy_name=None,
+        schema_version="1",
+        mode=snap.mode,
+        document=snap.policy,
+        effective_policy_hash=str(snap.meta.get("effective_hash") or ""),
+        sources=snap.meta.get("sources") or [],
+        compile=snap.meta.get("compile") or {},
+    )
+
+    # Last run (summary + items)
+    last_run = db.scalar(
+        select(Run)
+        .where(Run.device_id == device.id)
+        .order_by(desc(Run.started_at), desc(Run.id))
+        .limit(1)
+    )
+
+    last_run_summary: RunDebugSummary | None = None
+    last_items_out: list[RunItemDetail] = []
+    if last_run:
+        last_run_summary = RunDebugSummary(
+            id=str(last_run.id),
+            correlation_id=last_run.correlation_id,
+            started_at=last_run.started_at,
+            ended_at=last_run.ended_at,
+            status=_status(last_run.status),
+            agent_version=last_run.agent_version,
+            effective_policy_hash=last_run.effective_policy_hash,
+            summary=last_run.summary or {},
+            policy_snapshot=last_run.policy_snapshot or {},
+            detail_path=f"/api/v1/admin/runs/{last_run.id}",
+        )
+
+        items = list(
+            db.scalars(
+                select(RunItem)
+                .where(RunItem.run_id == last_run.id)
+                .order_by(RunItem.ordinal.asc())
+            ).all()
+        )
+
+        last_items_out = [
+            RunItemDetail(
+                id=str(i.id),
+                ordinal=i.ordinal,
+                resource_type=i.resource_type,
+                resource_id=i.resource_id,
+                name=i.name,
+                compliant_before=i.compliant_before,
+                compliant_after=i.compliant_after,
+                changed=i.changed,
+                reboot_required=i.reboot_required,
+                status_detect=_status(i.status_detect) or "unknown",
+                status_remediate=_status(i.status_remediate) or "unknown",
+                status_validate=_status(i.status_validate) or "unknown",
+                started_at=i.started_at,
+                ended_at=i.ended_at,
+                evidence=i.evidence or {},
+                error=i.error or {},
+            )
+            for i in items
+        ]
+
+    device_summary = DeviceSummary(
+        id=str(device.id),
+        device_key=device.device_key,
+        status=_status(device.status),
+        deleted_at=device.deleted_at,
+        deleted_reason=device.deleted_reason,
+        token_revoked_at=device.token_revoked_at,
+        hostname=device.hostname,
+        os=device.os,
+        os_version=device.os_version,
+        arch=device.arch,
+        agent_version=device.agent_version,
+        enrolled_at=device.enrolled_at,
+        last_seen_at=device.last_seen_at,
+        tags=device.tags or {},
+    )
+
+    return DeviceDebugResponse(
+        device=device_summary,
+        assignments=assignments_out,
+        effective_policy=effective_policy,
+        last_run=last_run_summary,
+        last_run_items=last_items_out,
+    )
+
+
 @router.get(
     "/admin/devices/{device_id}/runs",
     response_model=DeviceRunsResponse,
     dependencies=[Depends(require_admin)],
 )
 def list_device_runs(
-    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    device_id: str = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -724,13 +663,9 @@ def list_device_runs(
 @router.post(
     "/admin/policies",
     response_model=UpsertPolicyResponse,
+    dependencies=[Depends(require_admin)],
 )
-def upsert_policy(
-    request: Request,
-    payload: UpsertPolicyRequest,
-    admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
-) -> UpsertPolicyResponse:
+def upsert_policy(payload: UpsertPolicyRequest, db: Session = Depends(get_db)) -> UpsertPolicyResponse:
     existing = db.scalar(select(Policy).where(Policy.name == payload.name))
 
     try:
@@ -744,8 +679,6 @@ def upsert_policy(
             },
         )
 
-    created = False
-
     if existing:
         existing.description = payload.description
         existing.schema_version = payload.schema_version
@@ -753,108 +686,22 @@ def upsert_policy(
         existing.is_active = payload.is_active
         existing.updated_at = utcnow()
         db.add(existing)
-        policy_id = str(existing.id)
-    else:
-        created = True
-        policy = Policy(
-            name=payload.name,
-            description=payload.description,
-            schema_version=payload.schema_version,
-            document=normalized_doc,
-            is_active=payload.is_active,
-            created_at=utcnow(),
-            updated_at=utcnow(),
-        )
-        db.add(policy)
-        db.flush()
-        policy_id = str(policy.id)
+        db.commit()
+        return UpsertPolicyResponse(policy_id=str(existing.id), name=existing.name, is_active=existing.is_active)
 
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="policy.upsert",
-        target_type="policy",
-        target_id=policy_id,
-        data={
-            "name": payload.name,
-            "is_active": bool(payload.is_active),
-            "created": bool(created),
-        },
+    policy = Policy(
+        name=payload.name,
+        description=payload.description,
+        schema_version=payload.schema_version,
+        document=normalized_doc,
+        is_active=payload.is_active,
+        created_at=utcnow(),
+        updated_at=utcnow(),
     )
-
+    db.add(policy)
     db.commit()
-    return UpsertPolicyResponse(policy_id=policy_id, name=payload.name, is_active=payload.is_active)
+    return UpsertPolicyResponse(policy_id=str(policy.id), name=policy.name, is_active=policy.is_active)
 
-
-@router.get(
-    "/admin/audit",
-    response_model=AuditListResponse,
-    dependencies=[Depends(require_admin)],
-)
-def list_audit_events(
-    db: Session = Depends(get_db),
-    limit: int = Query(100, ge=1, le=500),
-    cursor: str | None = Query(None, description="Pagination cursor from a previous response"),
-    action: str | None = Query(None, description="Filter by action"),
-    target_type: str | None = Query(None, description="Filter by target_type"),
-    target_id: str | None = Query(None, description="Filter by target_id"),
-) -> AuditListResponse:
-    """List audit events (admin actions), newest first."""
-
-    def _parse_cursor(value: str) -> tuple[datetime, uuid.UUID]:
-        try:
-            ts_s, id_s = value.split("|", 1)
-            # fromisoformat does not accept 'Z' directly
-            ts = datetime.fromisoformat(ts_s.replace("Z", "+00:00"))
-            if ts.tzinfo is not None:
-                ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
-            return ts, uuid.UUID(id_s)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid cursor")
-
-    stmt = select(AuditLog)
-
-    if action:
-        stmt = stmt.where(AuditLog.action == action)
-    if target_type:
-        stmt = stmt.where(AuditLog.target_type == target_type)
-    if target_id:
-        stmt = stmt.where(AuditLog.target_id == target_id)
-
-    if cursor:
-        cur_ts, cur_id = _parse_cursor(cursor)
-        stmt = stmt.where(or_(AuditLog.ts < cur_ts, and_(AuditLog.ts == cur_ts, AuditLog.id < cur_id)))
-
-    stmt = stmt.order_by(desc(AuditLog.ts), desc(AuditLog.id)).limit(limit + 1)
-
-    rows = list(db.scalars(stmt).all())
-
-    next_cursor: str | None = None
-    if len(rows) > limit:
-        last = rows[limit - 1]
-        next_cursor = f"{last.ts.isoformat()}|{last.id}"
-        rows = rows[:limit]
-
-    items = [
-        AuditEvent(
-            id=str(r.id),
-            ts=r.ts,
-            actor_type=r.actor_type,
-            actor_id=r.actor_id,
-            action=r.action,
-            target_type=r.target_type,
-            target_id=r.target_id,
-            request_method=r.request_method,
-            request_path=r.request_path,
-            correlation_id=r.correlation_id,
-            remote_addr=r.remote_addr,
-            data=r.data or {},
-        )
-        for r in rows
-    ]
-
-    return AuditListResponse(items=items, limit=limit, next_cursor=next_cursor)
 
 
 @router.get(
@@ -1030,7 +877,7 @@ def list_devices(
 @router.get("/admin/runs", response_model=RunsListResponse, dependencies=[Depends(require_admin)])
 def list_runs(
     db: Session = Depends(get_db),
-    device_id: uuid.UUID | None = Query(None),
+    device_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> RunsListResponse:
@@ -1070,7 +917,7 @@ def list_runs(
     dependencies=[Depends(require_admin)],
 )
 def get_run_detail(
-    run_id: uuid.UUID = Path(...),
+    run_id: str = Path(...),
     db: Session = Depends(get_db),
 ) -> RunDetailResponse:
     run = db.scalar(select(Run).where(Run.id == run_id))
@@ -1128,7 +975,7 @@ def get_run_detail(
     "/admin/compile",
     dependencies=[Depends(require_admin)],
 )
-def compile_policy_for_device(device_id: uuid.UUID, db: Session = Depends(get_db)) -> dict[str, Any]:
+def compile_policy_for_device(device_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     """
     Debug endpoint: compile effective policy snapshot for a device.
 
@@ -1151,13 +998,9 @@ def _chunked(seq: list[Any], size: int) -> list[list[Any]]:
 @router.post(
     "/admin/maintenance/prune",
     response_model=PruneResponse,
+    dependencies=[Depends(require_admin)],
 )
-def prune_runs(
-    request: Request,
-    payload: PruneRequest,
-    admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
-) -> PruneResponse:
+def prune_runs(payload: PruneRequest, db: Session = Depends(get_db)) -> PruneResponse:
     """Prune old run data to keep the database bounded.
 
     Rules:
@@ -1211,27 +1054,19 @@ def prune_runs(
 
     if run_ids:
         counts_items = int(
-            db.scalar(select(func.count()).select_from(RunItem).where(RunItem.run_id.in_(run_ids))) or 0
+            db.scalar(
+                select(func.count()).select_from(RunItem).where(RunItem.run_id.in_(run_ids))
+            )
+            or 0
         )
         counts_logs = int(
-            db.scalar(select(func.count()).select_from(LogEvent).where(LogEvent.run_id.in_(run_ids))) or 0
+            db.scalar(
+                select(func.count()).select_from(LogEvent).where(LogEvent.run_id.in_(run_ids))
+            )
+            or 0
         )
 
     if payload.dry_run:
-        emit_admin_audit(
-            db,
-            request,
-            actor_id=admin_actor,
-            action="maintenance.prune",
-            data={
-                "dry_run": True,
-                "keep_days": int(payload.keep_days),
-                "keep_runs_per_device": int(payload.keep_runs_per_device),
-                "runs_targeted": int(runs_targeted),
-                "counts": {"runs": int(counts_runs), "run_items": int(counts_items), "log_events": int(counts_logs)},
-            },
-        )
-        db.commit()
         return PruneResponse(
             dry_run=True,
             keep_days=int(payload.keep_days),
@@ -1242,6 +1077,7 @@ def prune_runs(
             notes={"mode": "dry_run"},
         )
 
+
     deleted_logs = 0
     deleted_items = 0
     deleted_runs = 0
@@ -1251,37 +1087,33 @@ def prune_runs(
             continue
 
         deleted_logs += int(
-            db.query(LogEvent).filter(LogEvent.run_id.in_(chunk)).delete(synchronize_session=False) or 0
+            db.query(LogEvent)
+            .filter(LogEvent.run_id.in_(chunk))
+            .delete(synchronize_session=False)
+            or 0
         )
         deleted_items += int(
-            db.query(RunItem).filter(RunItem.run_id.in_(chunk)).delete(synchronize_session=False) or 0
+            db.query(RunItem)
+            .filter(RunItem.run_id.in_(chunk))
+            .delete(synchronize_session=False)
+            or 0
         )
         deleted_runs += int(
-            db.query(Run).filter(Run.id.in_(chunk)).delete(synchronize_session=False) or 0
+            db.query(Run)
+            .filter(Run.id.in_(chunk))
+            .delete(synchronize_session=False)
+            or 0
         )
-
-    emit_admin_audit(
-        db,
-        request,
-        actor_id=admin_actor,
-        action="maintenance.prune",
-        data={
-            "dry_run": False,
-            "keep_days": int(payload.keep_days),
-            "keep_runs_per_device": int(payload.keep_runs_per_device),
-            "runs_targeted": int(runs_targeted),
-            "counts": {"runs": int(deleted_runs), "run_items": int(deleted_items), "log_events": int(deleted_logs)},
-        },
-    )
 
     db.commit()
 
     return PruneResponse(
-        dry_run=False,
-        keep_days=int(payload.keep_days),
-        keep_runs_per_device=int(payload.keep_runs_per_device),
-        cutoff=cutoff,
-        runs_targeted=runs_targeted,
-        counts=PruneCounts(runs=deleted_runs, run_items=deleted_items, log_events=deleted_logs),
-        notes={"mode": "deleted"},
-    )
+    dry_run=False,
+    keep_days=int(payload.keep_days),
+    keep_runs_per_device=int(payload.keep_runs_per_device),
+    cutoff=cutoff,
+    runs_targeted=runs_targeted,
+    counts=PruneCounts(runs=deleted_runs, run_items=deleted_items, log_events=deleted_logs),
+    notes={"mode": "deleted"},
+)
+

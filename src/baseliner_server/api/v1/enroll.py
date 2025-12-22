@@ -58,21 +58,19 @@ def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollRespo
         db.add(device)
         db.flush()  # get device.id
     else:
-        # Update metadata + rotate token. Treat enrollment of an existing device
-        # as a token mint operation: the previous token becomes invalid.
         device.hostname = payload.hostname or device.hostname
         device.os = payload.os or device.os
         device.os_version = payload.os_version or device.os_version
         device.arch = payload.arch or device.arch
         device.agent_version = payload.agent_version or device.agent_version
         device.tags = payload.tags or device.tags
-
-        # Re-enrollment rotates the device token (old token should 403 with a clear message).
-        device.revoked_auth_token_hash = device.auth_token_hash
-        device.token_revoked_at = utcnow()
-        device.auth_token_hash = device_token_hash
-
+        device.status = DeviceStatus.active
+        device.deleted_at = None
+        device.deleted_reason = None
+        device.token_revoked_at = None
+        device.revoked_auth_token_hash = None
         device.last_seen_at = utcnow()
+        device.auth_token_hash = device_token_hash
         db.add(device)
 
     enroll_token.used_at = utcnow()

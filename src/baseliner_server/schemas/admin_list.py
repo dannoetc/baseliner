@@ -43,7 +43,7 @@ class DeviceSummary(ORMModel):
     id: str
     device_key: str
 
-    # Lifecycle status (soft delete / deactivate). When omitted, treat as "active".
+    # Lifecycle (soft delete / deactivate)
     status: str | None = None
     deleted_at: datetime | None = None
     deleted_reason: str | None = None

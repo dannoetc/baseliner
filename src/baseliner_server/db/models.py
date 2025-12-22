@@ -161,33 +161,6 @@ class EnrollToken(Base):
     )
 
 
-class AuditLog(Base):
-    __tablename__ = "audit_logs"
-
-    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-
-    # For MVP, actor is the admin key (hashed). This leaves room for future auth models.
-    actor_type: Mapped[str] = mapped_column(String(32), nullable=False)   # e.g. "admin_key"
-    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)     # sha256 hex digest
-
-    action: Mapped[str] = mapped_column(String(128), nullable=False)      # e.g. "device.delete"
-    target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g. "device"
-    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)    # typically a UUID string
-
-    request_method: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    request_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    remote_addr: Mapped[str | None] = mapped_column(String(64), nullable=True)
-
-    data: Mapped[dict] = mapped_column(JSON_COL, nullable=False, default=dict)
-
-    __table_args__ = (
-        Index("ix_audit_logs_ts", "ts"),
-        Index("ix_audit_logs_action", "action"),
-        Index("ix_audit_logs_target", "target_type", "target_id"),
-    )
-
 class Policy(Base):
     __tablename__ = "policies"
 

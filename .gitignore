@@ -1,52 +1,127 @@
-# --- Python virtual environments ---
+# ============================================================
+# Baseliner (monorepo) .gitignore
+# ============================================================
+
+# ------------------------------------------------------------
+# Python: bytecode / caches
+# ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+
+# ------------------------------------------------------------
+# Python: packaging / build artifacts
+# ------------------------------------------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+*.whl
+pip-wheel-metadata/
+MANIFEST
+
+# ------------------------------------------------------------
+# Python: virtual environments
+# ------------------------------------------------------------
 .venv/
 venv/
 env/
 ENV/
-server/.venv/**
-agent/.venv/**
-agent/venv-build/**
+
 **/.venv/
 **/venv/
 **/env/
 **/ENV/
 
-# --- Python cache / build artifacts ---
-__pycache__/
-*.py[cod]
-*.pyd
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.cache/
+# Build venvs used by agent packaging (PyInstaller, etc.)
+.venv-build/
+**/.venv-build/
+agent/.venv-build/
+server/.venv/
+agent/.venv/
+shared/.venv/
 
-build/
-dist/
-agent/dist/**
-*.egg-info/
-.eggs/
-
-# --- Coverage / test reports ---
-.coverage*
-htmlcov/
-coverage.xml
-
-# --- VS Code (optional; keep workspace settings if you prefer) ---
-.vscode/*
-!.vscode/settings.json
-!.vscode/launch.json
-!.vscode/extensions.json
-
-# --- OS / editor noise ---
-.DS_Store
-Thumbs.db
-
-# --- Logs ---
-*.lo*
-
-# --- Misc --- 
-agent/out/**
-# --- Env files ---
+# ------------------------------------------------------------
+# Environment files (keep examples)
+# ------------------------------------------------------------
 .env
+.env.*
+!.env.example
+!**/.env.example
+
+# (explicit) local env files that should never be committed
 server/.env
 agent/.env
+
+# ------------------------------------------------------------
+# Logs / runtime files
+# ------------------------------------------------------------
+*.log
+*.log.*
+logs/
+**/logs/
+*.pid
+*.sock
+
+# ------------------------------------------------------------
+# OS / editor / IDE noise
+# ------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Visual Studio / VS Code / JetBrains
+.vs/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# ------------------------------------------------------------
+# Databases / local state
+# ------------------------------------------------------------
+*.sqlite3
+*.db
+
+# Postgres local volumes (if you ever bind-mount them)
+pgdata/
+**/pgdata/
+
+# ------------------------------------------------------------
+# Docker / compose local overrides
+# ------------------------------------------------------------
+docker-compose.override.yml
+
+# ------------------------------------------------------------
+# Agent build outputs (don’t commit builds)
+# ------------------------------------------------------------
+agent/out/
+agent/build/
+agent/dist/
+
+# Common agent packaging artifacts (scoped to agent/)
+agent/**/*.exe
+agent/**/*.msi
+agent/**/*.zip
+agent/**/*.tar
+agent/**/*.tar.gz
+agent/**/*.tgz
+
+# ------------------------------------------------------------
+# Nginx/certbot local artifacts (if you ever bind-mount to repo)
+# ------------------------------------------------------------
+deploy/nginx/certs/
+deploy/nginx/letsencrypt/
+letsencrypt/
+certbot/

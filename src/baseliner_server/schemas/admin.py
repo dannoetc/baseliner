@@ -77,20 +77,6 @@ class DeleteDeviceResponse(BaseModel):
     assignments_removed: int = 0
 
 
-class RestoreDeviceResponse(BaseModel):
-    device_id: str
-    status: str
-    restored_at: datetime
-    device_token: str
-
-
-class RevokeDeviceTokenResponse(BaseModel):
-    device_id: str
-    status: str
-    token_revoked_at: datetime
-    device_token: str
-
-
 # ---------------------------------------------------------------------------
 # Policy upsert models (re-exported for backwards compatibility)
 # ---------------------------------------------------------------------------
@@ -152,8 +138,6 @@ __all__ = [
     "DeviceAssignmentsResponse",
     "ClearAssignmentsResponse",
     "DeleteDeviceResponse",
-    "RestoreDeviceResponse",
-    "RevokeDeviceTokenResponse",
     # policy upsert
     "UpsertPolicyRequest",
     "UpsertPolicyResponse",
