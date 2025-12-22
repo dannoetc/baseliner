@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
 from baseliner_server.api.deps import hash_token
 from baseliner_server.db.models import Device, Run
 from baseliner_server.middleware.rate_limit import InMemoryRateLimiter, RateLimitConfig
 from baseliner_server.middleware.request_size import RequestSizeLimits
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 
 def _create_device(db, token: str = "token") -> Device:

@@ -43,11 +43,18 @@ ENV/
 **/venv/
 **/env/
 **/ENV/
+**/.venv/*
+**/venv/*
+**/env/*
+**/ENV/*
 
 # Build venvs used by agent packaging (PyInstaller, etc.)
 .venv-build/
+.venv-build/*
 **/.venv-build/
+**/.venv-build/*
 agent/.venv-build/
+agent/.venv-build/*
 server/.venv/
 agent/.venv/
 shared/.venv/

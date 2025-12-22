@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
 from baseliner_server.api.deps import hash_token
 from baseliner_server.db.models import Device, DeviceStatus
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 
 def _utcnow() -> datetime:

@@ -6,13 +6,12 @@ from pathlib import Path
 from typing import Generator
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-
 from baseliner_server.api.deps import get_db, require_admin, require_admin_actor
 from baseliner_server.db.base import Base
 from baseliner_server.main import app
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 
 @pytest.fixture()

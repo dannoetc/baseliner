@@ -3,8 +3,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
-
 from baseliner_server.db.models import (
     Device,
     LogEvent,
@@ -14,6 +12,7 @@ from baseliner_server.db.models import (
     RunStatus,
     StepStatus,
 )
+from sqlalchemy import select
 
 
 def _utc_naive(dt: datetime) -> datetime:

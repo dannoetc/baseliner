@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import httpx
-
 from baseliner_server.db.models import Device, Run, RunStatus
 
 
