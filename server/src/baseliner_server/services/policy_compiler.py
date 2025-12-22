@@ -53,7 +53,6 @@ def _resource_key(res: dict[str, Any]) -> tuple[str, str] | None:
     return (rtype, rid.lower())
 
 
-
 def _iter_resources(doc: dict[str, Any] | None) -> Iterable[dict[str, Any]]:
     if not doc:
         return []
@@ -159,7 +158,7 @@ def compile_effective_policy(db: Session, device: Device | str | uuid.UUID) -> P
         # Human-friendly canonical key used by compile metadata.
         return f"{key[0]}:{key[1]}"
 
-    for (a, p) in rows:
+    for a, p in rows:
         src = {
             "assignment_id": str(a.id),
             "created_at": a.created_at,

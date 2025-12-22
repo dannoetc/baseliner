@@ -25,7 +25,9 @@ def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollRespo
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid enroll token")
 
     if enroll_token.used_at is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Enroll token already used")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Enroll token already used"
+        )
 
     if enroll_token.expires_at is not None and enroll_token.expires_at < utcnow():
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Enroll token expired")

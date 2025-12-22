@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from baseliner_server.main import app
 from baseliner_server.api.deps import get_db, require_admin, require_admin_actor
 from baseliner_server.db.base import Base
+from baseliner_server.main import app
 
 
 @pytest.fixture()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .security.dpapi import protect_bytes, unprotect_bytes
@@ -110,9 +110,7 @@ class AgentState:
 
         # Keep legacy alias in sync on write.
         self.last_policy_hash = (
-            self.last_reported_policy_hash
-            or self.last_applied_policy_hash
-            or self.last_policy_hash
+            self.last_reported_policy_hash or self.last_applied_policy_hash or self.last_policy_hash
         )
 
         payload = asdict(self)

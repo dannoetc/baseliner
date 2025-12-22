@@ -87,7 +87,7 @@ class PowerShellScriptHandler:
 
     def run(self, res: dict[str, Any], *, ordinal: int, mode: str) -> ItemResult:
         rid = str(res.get("id") or "").strip() or "powershell"
-        name = (res.get("name") or rid)
+        name = res.get("name") or rid
 
         # Detect can be inline script or a script path.
         detect_script = _pick_script(res, "detect", "script", "check", "test")
@@ -130,8 +130,13 @@ class PowerShellScriptHandler:
                 "status_validate": "skipped",
                 "started_at": started_at,
                 "ended_at": utcnow_iso(),
-                "evidence": {"meta": {"detect_source": detect_src, "remediate_source": remediate_src}},
-                "error": {"type": "invalid_resource", "message": "script.powershell missing detect/script or path"},
+                "evidence": {
+                    "meta": {"detect_source": detect_src, "remediate_source": remediate_src}
+                },
+                "error": {
+                    "type": "invalid_resource",
+                    "message": "script.powershell missing detect/script or path",
+                },
             }
             logs.append(
                 {
@@ -189,7 +194,10 @@ class PowerShellScriptHandler:
                 "started_at": started_at,
                 "ended_at": utcnow_iso(),
                 "evidence": evidence,
-                "error": {"type": "timeout", "message": f"Detect timed out after {detect_timeout_s}s"},
+                "error": {
+                    "type": "timeout",
+                    "message": f"Detect timed out after {detect_timeout_s}s",
+                },
             }
             logs.append(
                 {
@@ -212,7 +220,10 @@ class PowerShellScriptHandler:
         if not compliant_before and mode != "audit":
             if not remediate_script and not remediate_path:
                 success = False
-                error = {"type": "no_remediate", "message": "Noncompliant but no remediate script/path provided"}
+                error = {
+                    "type": "no_remediate",
+                    "message": "Noncompliant but no remediate script/path provided",
+                }
             else:
                 if remediate_script:
                     rem = run_ps(remediate_script, timeout_s=remediate_timeout_s)
@@ -232,7 +243,10 @@ class PowerShellScriptHandler:
 
                 if rem.exit_code == 124:
                     success = False
-                    error = {"type": "timeout", "message": f"Remediate timed out after {remediate_timeout_s}s"}
+                    error = {
+                        "type": "timeout",
+                        "message": f"Remediate timed out after {remediate_timeout_s}s",
+                    }
                 elif rem.exit_code != 0:
                     success = False
                     error = {
@@ -257,10 +271,16 @@ class PowerShellScriptHandler:
 
         if val.exit_code == 124:
             success = False
-            error = {"type": "timeout", "message": f"Validate timed out after {validate_timeout_s}s"}
+            error = {
+                "type": "timeout",
+                "message": f"Validate timed out after {validate_timeout_s}s",
+            }
         elif not compliant_after:
             success = False
-            error = error or {"type": "still_noncompliant", "message": "Detect still failing after remediation"}
+            error = error or {
+                "type": "still_noncompliant",
+                "message": "Detect still failing after remediation",
+            }
         else:
             # If remediation timed out but validate proves compliance, clear the timeout error.
             if error.get("type") == "timeout":

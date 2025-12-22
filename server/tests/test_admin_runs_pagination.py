@@ -123,11 +123,23 @@ def test_runs_device_id_filter(client, db):
     # d1 gets 3 runs, d2 gets 7 runs
     for i in range(3):
         st = now - timedelta(minutes=10 - i)
-        _create_run(db, device_id=d1.id, started_at=st, ended_at=st + timedelta(seconds=5), status=RunStatus.succeeded)
+        _create_run(
+            db,
+            device_id=d1.id,
+            started_at=st,
+            ended_at=st + timedelta(seconds=5),
+            status=RunStatus.succeeded,
+        )
 
     for i in range(7):
         st = now - timedelta(minutes=20 - i)
-        _create_run(db, device_id=d2.id, started_at=st, ended_at=st + timedelta(seconds=5), status=RunStatus.failed)
+        _create_run(
+            db,
+            device_id=d2.id,
+            started_at=st,
+            ended_at=st + timedelta(seconds=5),
+            status=RunStatus.failed,
+        )
 
     db.commit()
 

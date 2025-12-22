@@ -85,7 +85,9 @@ class InMemoryRateLimiter:
         # Still too large? Drop oldest.
         if len(self._buckets) <= self._max_entries:
             return
-        for k, _ts in sorted(self._last_seen.items(), key=lambda kv: kv[1])[: max(0, len(self._buckets) - self._max_entries)]:
+        for k, _ts in sorted(self._last_seen.items(), key=lambda kv: kv[1])[
+            : max(0, len(self._buckets) - self._max_entries)
+        ]:
             self._buckets.pop(k, None)
             self._last_seen.pop(k, None)
 
@@ -136,14 +138,18 @@ def _try_get_device_id(db: Session, token: str) -> str | None:
 
 
 def _get_config(request: Request) -> RateLimitConfig:
-    cfg: RateLimitConfig | None = getattr(getattr(request.app, "state", None), "rate_limit_config", None)
+    cfg: RateLimitConfig | None = getattr(
+        getattr(request.app, "state", None), "rate_limit_config", None
+    )
     if cfg is None:
         return RateLimitConfig()
     return cfg
 
 
 def _get_limiter(request: Request) -> InMemoryRateLimiter:
-    limiter: InMemoryRateLimiter | None = getattr(getattr(request.app, "state", None), "rate_limiter", None)
+    limiter: InMemoryRateLimiter | None = getattr(
+        getattr(request.app, "state", None), "rate_limiter", None
+    )
     if limiter is None:
         limiter = InMemoryRateLimiter()
         request.app.state.rate_limiter = limiter

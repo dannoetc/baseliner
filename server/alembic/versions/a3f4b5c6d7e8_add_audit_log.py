@@ -8,9 +8,10 @@ Create Date: 2025-12-21 00:00:00
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a3f4b5c6d7e8"
@@ -39,7 +40,9 @@ def upgrade() -> None:
 
     op.create_index("ix_audit_logs_ts", "audit_logs", ["ts"], unique=False)
     op.create_index("ix_audit_logs_action", "audit_logs", ["action"], unique=False)
-    op.create_index("ix_audit_logs_target", "audit_logs", ["target_type", "target_id"], unique=False)
+    op.create_index(
+        "ix_audit_logs_target", "audit_logs", ["target_type", "target_id"], unique=False
+    )
 
 
 def downgrade() -> None:

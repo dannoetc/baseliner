@@ -67,7 +67,7 @@ def validate_and_normalize_document(document: Any) -> dict[str, Any]:
         nr["type"] = rtype
 
         rid = nr.get("id")
-        rid_str = (str(rid).strip().lower() if rid is not None else "")
+        rid_str = str(rid).strip().lower() if rid is not None else ""
 
         # Auto-fill id for winget.package if missing and package_id is present
         if not rid_str and rtype == "winget.package":
@@ -116,7 +116,9 @@ def validate_and_normalize_document(document: Any) -> dict[str, Any]:
                         raise ValueError()
                     nr["timeout_seconds"] = ts_i
                 except Exception:
-                    errors.append(PolicyDocError(f"{pfx}.timeout_seconds", "must be a positive integer"))
+                    errors.append(
+                        PolicyDocError(f"{pfx}.timeout_seconds", "must be a positive integer")
+                    )
                 if "timeoutSeconds" in nr:
                     del nr["timeoutSeconds"]
 

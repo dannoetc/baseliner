@@ -3,14 +3,14 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean,
     CHAR,
+    JSON,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -34,6 +34,7 @@ class GUID(TypeDecorator):
     - Postgres: UUID(as_uuid=True)
     - SQLite:   CHAR(36) storing string UUIDs
     """
+
     impl = CHAR
     cache_ok = True
 
@@ -114,23 +115,31 @@ class Device(Base):
 
     tags: Mapped[dict] = mapped_column(JSON_COL, nullable=False, default=dict)
 
-    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    enrolled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Store only a hash of the device auth token
     auth_token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Lifecycle
-    status: Mapped[DeviceStatus] = mapped_column(Enum(DeviceStatus), nullable=False, default=DeviceStatus.active)
+    status: Mapped[DeviceStatus] = mapped_column(
+        Enum(DeviceStatus), nullable=False, default=DeviceStatus.active
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Token revocation support (admin lifecycle).
-    token_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     revoked_auth_token_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     runs: Mapped[list["Run"]] = relationship(back_populates="device", cascade="all, delete-orphan")
-    assignments: Mapped[list["PolicyAssignment"]] = relationship(back_populates="device", cascade="all, delete-orphan")
+    assignments: Mapped[list["PolicyAssignment"]] = relationship(
+        back_populates="device", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_devices_last_seen_at", "last_seen_at"),
@@ -146,7 +155,9 @@ class EnrollToken(Base):
 
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -156,9 +167,7 @@ class EnrollToken(Base):
 
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (
-        Index("ix_enroll_tokens_expires_at", "expires_at"),
-    )
+    __table_args__ = (Index("ix_enroll_tokens_expires_at", "expires_at"),)
 
 
 class AuditLog(Base):
@@ -168,12 +177,14 @@ class AuditLog(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     # For MVP, actor is the admin key (hashed). This leaves room for future auth models.
-    actor_type: Mapped[str] = mapped_column(String(32), nullable=False)   # e.g. "admin_key"
-    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)     # sha256 hex digest
+    actor_type: Mapped[str] = mapped_column(String(32), nullable=False)  # e.g. "admin_key"
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)  # sha256 hex digest
 
-    action: Mapped[str] = mapped_column(String(128), nullable=False)      # e.g. "device.delete"
+    action: Mapped[str] = mapped_column(String(128), nullable=False)  # e.g. "device.delete"
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g. "device"
-    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)    # typically a UUID string
+    target_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )  # typically a UUID string
 
     request_method: Mapped[str | None] = mapped_column(String(8), nullable=True)
     request_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -188,6 +199,7 @@ class AuditLog(Base):
         Index("ix_audit_logs_target", "target_type", "target_id"),
     )
 
+
 class Policy(Base):
     __tablename__ = "policies"
 
@@ -201,14 +213,18 @@ class Policy(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-
-    assignments: Mapped[list["PolicyAssignment"]] = relationship(back_populates="policy", cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index("ix_policies_is_active", "is_active"),
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    assignments: Mapped[list["PolicyAssignment"]] = relationship(
+        back_populates="policy", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (Index("ix_policies_is_active", "is_active"),)
 
 
 class PolicyAssignment(Base):
@@ -216,13 +232,21 @@ class PolicyAssignment(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
 
-    device_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("devices.id", ondelete="CASCADE"))
-    policy_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("policies.id", ondelete="CASCADE"))
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("devices.id", ondelete="CASCADE")
+    )
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("policies.id", ondelete="CASCADE")
+    )
 
-    mode: Mapped[AssignmentMode] = mapped_column(Enum(AssignmentMode), nullable=False, default=AssignmentMode.enforce)
+    mode: Mapped[AssignmentMode] = mapped_column(
+        Enum(AssignmentMode), nullable=False, default=AssignmentMode.enforce
+    )
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
     device: Mapped["Device"] = relationship(back_populates="assignments")
     policy: Mapped["Policy"] = relationship(back_populates="assignments")
@@ -239,14 +263,20 @@ class Run(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
 
-    device_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("devices.id", ondelete="CASCADE"))
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("devices.id", ondelete="CASCADE")
+    )
 
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     effective_policy_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), nullable=False, default=RunStatus.running)
+    status: Mapped[RunStatus] = mapped_column(
+        Enum(RunStatus), nullable=False, default=RunStatus.running
+    )
 
     agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -260,8 +290,12 @@ class Run(Base):
     summary: Mapped[dict] = mapped_column(JSON_COL, nullable=False, default=dict)
 
     device: Mapped["Device"] = relationship(back_populates="runs")
-    items: Mapped[list["RunItem"]] = relationship(back_populates="run", cascade="all, delete-orphan")
-    logs: Mapped[list["LogEvent"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    items: Mapped[list["RunItem"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    logs: Mapped[list["LogEvent"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_runs_device_id_started_at", "device_id", "started_at"),
@@ -276,8 +310,12 @@ class RunItem(Base):
 
     run_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("runs.id", ondelete="CASCADE"))
 
-    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)  # "winget.package", "script.powershell"
-    resource_id: Mapped[str] = mapped_column(String(256), nullable=False)  # e.g., winget Id or script name/key
+    resource_type: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )  # "winget.package", "script.powershell"
+    resource_id: Mapped[str] = mapped_column(
+        String(256), nullable=False
+    )  # e.g., winget Id or script name/key
     name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -286,9 +324,15 @@ class RunItem(Base):
     changed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     reboot_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    status_detect: Mapped[StepStatus] = mapped_column(Enum(StepStatus), nullable=False, default=StepStatus.not_run)
-    status_remediate: Mapped[StepStatus] = mapped_column(Enum(StepStatus), nullable=False, default=StepStatus.not_run)
-    status_validate: Mapped[StepStatus] = mapped_column(Enum(StepStatus), nullable=False, default=StepStatus.not_run)
+    status_detect: Mapped[StepStatus] = mapped_column(
+        Enum(StepStatus), nullable=False, default=StepStatus.not_run
+    )
+    status_remediate: Mapped[StepStatus] = mapped_column(
+        Enum(StepStatus), nullable=False, default=StepStatus.not_run
+    )
+    status_validate: Mapped[StepStatus] = mapped_column(
+        Enum(StepStatus), nullable=False, default=StepStatus.not_run
+    )
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -297,9 +341,10 @@ class RunItem(Base):
     error: Mapped[dict] = mapped_column(JSON_COL, nullable=False, default=dict)
 
     run: Mapped["Run"] = relationship(back_populates="items")
-    logs: Mapped[list["LogEvent"]] = relationship(back_populates="run_item", cascade="all, delete-orphan")
+    logs: Mapped[list["LogEvent"]] = relationship(
+        back_populates="run_item", cascade="all, delete-orphan"
+    )
 
-    
     __table_args__ = (
         Index("ix_run_items_run_id", "run_id"),
         Index("ix_run_items_run_id_ordinal", "run_id", "ordinal"),

@@ -1,4 +1,4 @@
-#-----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Copyright (c) 2005-2023, PyInstaller Development Team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -7,7 +7,7 @@
 # The full license is in the file COPYING.txt, distributed with this software.
 #
 # SPDX-License-Identifier: Apache-2.0
-#-----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 # This Django rthook was tested with Django 1.8.3.
 
@@ -19,6 +19,7 @@ def _pyi_rthook():
 
     def _restart_with_reloader(*args):
         import sys
+
         a0 = sys.argv.pop(0)
         try:
             return _old_restart_with_reloader(*args)

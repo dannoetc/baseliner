@@ -81,7 +81,7 @@ def _run(args: Sequence[str], *, timeout_s: int) -> tuple[int, str, str]:
             out, err = "", ""
 
         msg = f"timeout after {timeout_s}s; killed process tree pid={p.pid}"
-        err_full = (err or "")
+        err_full = err or ""
         err_full = (err_full + "\n" + msg) if err_full else msg
         return 124, out or "", err_full
 
@@ -107,7 +107,9 @@ def run_ps(script: str, timeout_s: int = 300) -> PowerShellResult:
     return PowerShellResult(exit_code=code, stdout=out, stderr=err, engine=engine)
 
 
-def run_ps_file(path: str, *, timeout_s: int = 300, args: Sequence[str] | None = None) -> PowerShellResult:
+def run_ps_file(
+    path: str, *, timeout_s: int = 300, args: Sequence[str] | None = None
+) -> PowerShellResult:
     """Run a PowerShell script file via -File.
 
     Returns:
@@ -120,7 +122,9 @@ def run_ps_file(path: str, *, timeout_s: int = 300, args: Sequence[str] | None =
         return PowerShellResult(exit_code=127, stdout="", stderr="empty path", engine="powershell")
 
     if not os.path.exists(p):
-        return PowerShellResult(exit_code=127, stdout="", stderr=f"file not found: {p}", engine="powershell")
+        return PowerShellResult(
+            exit_code=127, stdout="", stderr=f"file not found: {p}", engine="powershell"
+        )
 
     engine = pick_powershell()
 

@@ -113,5 +113,5 @@ try {
     }
 }
 finally {
-    Pop-Location 
+    Pop-Location
 }

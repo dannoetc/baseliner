@@ -8,8 +8,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from baseliner_server.core.config import settings
-from baseliner_server.db.session import SessionLocal
 from baseliner_server.db.models import Device, DeviceStatus
+from baseliner_server.db.session import SessionLocal
 
 
 def utcnow() -> datetime:

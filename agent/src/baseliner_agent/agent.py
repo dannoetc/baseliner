@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from .agent_health import write_health
+from .engine import PolicyEngine
 from .http_client import ApiClient, LogFn
 from .local_logging import log_event, new_run_log_path, prune_run_logs
 from .reporting import (
@@ -18,9 +19,8 @@ from .reporting import (
     queue_report,
     utcnow_iso,
 )
-from .state import AgentState
-from .engine import PolicyEngine
 from .resources import default_handlers
+from .state import AgentState
 
 
 def _device_facts() -> dict[str, Any]:
@@ -37,7 +37,12 @@ def _http_log_fn(run_log, local_run_id: str | None) -> LogFn | None:
         return None
 
     def _log(event: dict[str, Any]) -> None:
-        payload = {"ts": utcnow_iso(), "local_run_id": local_run_id, "correlation_id": local_run_id, **event}
+        payload = {
+            "ts": utcnow_iso(),
+            "local_run_id": local_run_id,
+            "correlation_id": local_run_id,
+            **event,
+        }
         payload.setdefault("level", "info")
         log_event(run_log, payload)
 
@@ -66,7 +71,12 @@ def _offline_report(*, state: AgentState, started: str, ended: str, error: str) 
         },
         "items": [],
         "logs": [
-            {"ts": ended, "level": "error", "message": "Failed to fetch policy; server unreachable", "data": {"error": error}},
+            {
+                "ts": ended,
+                "level": "error",
+                "message": "Failed to fetch policy; server unreachable",
+                "data": {"error": error},
+            },
         ],
     }
 
@@ -118,7 +128,9 @@ def _compute_observed_state_hash(items: list[dict[str, Any]]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def enroll_device(server: str, enroll_token: str, device_key: str, tags: dict[str, Any], state_dir: str) -> None:
+def enroll_device(
+    server: str, enroll_token: str, device_key: str, tags: dict[str, Any], state_dir: str
+) -> None:
     state = AgentState.load(state_dir)
     enroll_correlation_id = f"enroll-{uuid.uuid4()}"
     client = ApiClient(server, correlation_id=enroll_correlation_id)
@@ -158,36 +170,68 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
     run_log = new_run_log_path(state_dir, started, local_run_id)
     http_log = _http_log_fn(run_log, local_run_id)
 
-    log_event(run_log, {
-        "ts": started, "level": "info", "event": "run_start",
-        "local_run_id": local_run_id, "correlation_id": local_run_id, "server": server,
-        "device_id": state.device_id, "device_key": state.device_key,
-        "agent_version": state.agent_version, "force": bool(force),
-    })
+    log_event(
+        run_log,
+        {
+            "ts": started,
+            "level": "info",
+            "event": "run_start",
+            "local_run_id": local_run_id,
+            "correlation_id": local_run_id,
+            "server": server,
+            "device_id": state.device_id,
+            "device_key": state.device_key,
+            "agent_version": state.agent_version,
+            "force": bool(force),
+        },
+    )
 
     # Best-effort flush; if server is down, don't crash the run
     try:
-        _flush_queue(client, state, state_dir, run_log=run_log, local_run_id=local_run_id, http_log_fn=http_log)
+        _flush_queue(
+            client,
+            state,
+            state_dir,
+            run_log=run_log,
+            local_run_id=local_run_id,
+            http_log_fn=http_log,
+        )
     except Exception as e:
-        log_event(run_log, {
-            "ts": utcnow_iso(), "level": "warning", "event": "queue_flush_failed",
-            "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e),
-        })
+        log_event(
+            run_log,
+            {
+                "ts": utcnow_iso(),
+                "level": "warning",
+                "event": "queue_flush_failed",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "error": str(e),
+            },
+        )
 
     policy_request_id = None
     # Fetch effective policy (MUST NOT hard-crash the whole run)
     try:
-        pol_resp = client.get_json("/api/v1/device/policy", log_fn=http_log, correlation_id=local_run_id)
+        pol_resp = client.get_json(
+            "/api/v1/device/policy", log_fn=http_log, correlation_id=local_run_id
+        )
         pol = pol_resp.data
         policy_request_id = pol_resp.request_id
     except Exception as e:
         ended = utcnow_iso()
         err = str(e)
 
-        log_event(run_log, {
-            "ts": ended, "level": "error", "event": "policy_fetch_failed",
-            "local_run_id": local_run_id, "correlation_id": local_run_id, "error": err,
-        })
+        log_event(
+            run_log,
+            {
+                "ts": ended,
+                "level": "error",
+                "event": "policy_fetch_failed",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "error": err,
+            },
+        )
 
         # Update local state + health even though we're offline
         state.last_run_at = ended
@@ -206,16 +250,32 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         try:
             mf, mb = queue_limits()
             prune_queue(state_dir, max_files=mf, max_bytes=mb)
-            path = queue_report(state_dir, _offline_report(state=state, started=started, ended=ended, error=err))
-            log_event(run_log, {
-                "ts": utcnow_iso(), "level": "warning", "event": "offline_report_queued",
-                "local_run_id": local_run_id, "correlation_id": local_run_id, "queued_path": str(path),
-            })
+            path = queue_report(
+                state_dir, _offline_report(state=state, started=started, ended=ended, error=err)
+            )
+            log_event(
+                run_log,
+                {
+                    "ts": utcnow_iso(),
+                    "level": "warning",
+                    "event": "offline_report_queued",
+                    "local_run_id": local_run_id,
+                    "correlation_id": local_run_id,
+                    "queued_path": str(path),
+                },
+            )
         except Exception as qe:
-            log_event(run_log, {
-                "ts": utcnow_iso(), "level": "warning", "event": "offline_report_queue_failed",
-                "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(qe),
-            })
+            log_event(
+                run_log,
+                {
+                    "ts": utcnow_iso(),
+                    "level": "warning",
+                    "event": "offline_report_queue_failed",
+                    "local_run_id": local_run_id,
+                    "correlation_id": local_run_id,
+                    "error": str(qe),
+                },
+            )
 
         print(f"[ERROR] {err}")
         return
@@ -323,7 +383,12 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "ts": utcnow_iso(),
             "level": "info",
             "message": "Run finished",
-            "data": {"correlation_id": local_run_id, "ok": ok, "failed": items_failed, "status": status},
+            "data": {
+                "correlation_id": local_run_id,
+                "ok": ok,
+                "failed": items_failed,
+                "status": status,
+            },
         }
     )
 
@@ -335,7 +400,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         "items_failed": items_failed,
         "items_changed": items_changed,
         "ok": ok,
-        "failed": items_failed,     # legacy
+        "failed": items_failed,  # legacy
         "itemsTotal": items_total,  # legacy
         "observed_state_hash": observed_state_hash,
     }
@@ -398,12 +463,26 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         hp = write_health(state_dir, state=state)
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "health_written", "local_run_id": local_run_id, "correlation_id": local_run_id, "path": str(hp)},
+            {
+                "ts": utcnow_iso(),
+                "level": "info",
+                "event": "health_written",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "path": str(hp),
+            },
         )
     except Exception as e:
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "warning", "event": "health_write_failed", "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e)},
+            {
+                "ts": utcnow_iso(),
+                "level": "warning",
+                "event": "health_write_failed",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "error": str(e),
+            },
         )
 
     # Post report (fallback to queue)
@@ -430,25 +509,47 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "report_posted", "local_run_id": local_run_id, "correlation_id": local_run_id, "server_run_id": run_id, "effective_policy_hash": effective_hash, "request_id": report_request_id},
+            {
+                "ts": utcnow_iso(),
+                "level": "info",
+                "event": "report_posted",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "server_run_id": run_id,
+                "effective_policy_hash": effective_hash,
+                "request_id": report_request_id,
+            },
         )
     except Exception as e:
         mf, mb = queue_limits()
         stats1 = prune_queue(state_dir, max_files=mf, max_bytes=mb)
         if stats1.get("removed_files", 0) > 0:
-            print(f"[WARN] Pruned queued reports before enqueue: removed_files={stats1['removed_files']} removed_bytes={stats1['removed_bytes']}")
+            print(
+                f"[WARN] Pruned queued reports before enqueue: removed_files={stats1['removed_files']} removed_bytes={stats1['removed_bytes']}"
+            )
 
         path = queue_report(state_dir, report)
         print(f"[WARN] Failed to post report ({e}); queued at {path}")
 
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "warning", "event": "report_queued", "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e), "queued_path": str(path), "effective_policy_hash": effective_hash},
+            {
+                "ts": utcnow_iso(),
+                "level": "warning",
+                "event": "report_queued",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "error": str(e),
+                "queued_path": str(path),
+                "effective_policy_hash": effective_hash,
+            },
         )
 
         stats2 = prune_queue(state_dir, max_files=mf, max_bytes=mb)
         if stats2.get("removed_files", 0) > 0:
-            print(f"[WARN] Pruned queued reports after enqueue: removed_files={stats2['removed_files']} removed_bytes={stats2['removed_bytes']}")
+            print(
+                f"[WARN] Pruned queued reports after enqueue: removed_files={stats2['removed_files']} removed_bytes={stats2['removed_bytes']}"
+            )
 
         try:
             write_health(state_dir, state=state)
@@ -470,11 +571,21 @@ def _flush_queue(
     mf, mb = queue_limits()
     stats = prune_queue(state_dir, max_files=mf, max_bytes=mb)
     if stats.get("removed_files", 0) > 0:
-        print(f"[WARN] Pruned queued reports: removed_files={stats['removed_files']} removed_bytes={stats['removed_bytes']}")
+        print(
+            f"[WARN] Pruned queued reports: removed_files={stats['removed_files']} removed_bytes={stats['removed_bytes']}"
+        )
         if run_log is not None:
             log_event(
                 run_log,
-                {"ts": utcnow_iso(), "level": "warning", "event": "queue_pruned", "local_run_id": local_run_id, "correlation_id": local_run_id, "removed_files": stats.get("removed_files"), "removed_bytes": stats.get("removed_bytes")},
+                {
+                    "ts": utcnow_iso(),
+                    "level": "warning",
+                    "event": "queue_pruned",
+                    "local_run_id": local_run_id,
+                    "correlation_id": local_run_id,
+                    "removed_files": stats.get("removed_files"),
+                    "removed_bytes": stats.get("removed_bytes"),
+                },
             )
 
     queued = iter_queued_reports(state_dir)
@@ -484,7 +595,14 @@ def _flush_queue(
     if run_log is not None:
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_start", "local_run_id": local_run_id, "correlation_id": local_run_id, "queued_count": len(queued)},
+            {
+                "ts": utcnow_iso(),
+                "level": "info",
+                "event": "queue_flush_start",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "queued_count": len(queued),
+            },
         )
 
     changed = False
@@ -513,14 +631,29 @@ def _flush_queue(
             if run_log is not None:
                 log_event(
                     run_log,
-                    {"ts": utcnow_iso(), "level": "warning", "event": "queue_flush_error", "local_run_id": local_run_id, "correlation_id": local_run_id, "error": str(e), "stopped_after_flushed": flushed},
+                    {
+                        "ts": utcnow_iso(),
+                        "level": "warning",
+                        "event": "queue_flush_error",
+                        "local_run_id": local_run_id,
+                        "correlation_id": local_run_id,
+                        "error": str(e),
+                        "stopped_after_flushed": flushed,
+                    },
                 )
             break
 
     if run_log is not None:
         log_event(
             run_log,
-            {"ts": utcnow_iso(), "level": "info", "event": "queue_flush_end", "local_run_id": local_run_id, "correlation_id": local_run_id, "flushed": flushed},
+            {
+                "ts": utcnow_iso(),
+                "level": "info",
+                "event": "queue_flush_end",
+                "local_run_id": local_run_id,
+                "correlation_id": local_run_id,
+                "flushed": flushed,
+            },
         )
 
     if changed:

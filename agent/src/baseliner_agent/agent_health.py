@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .reporting import queue_limits, iter_queued_reports
+from .reporting import iter_queued_reports, queue_limits
 from .state import AgentState
 
 
@@ -125,7 +125,9 @@ def build_health(state_dir: str | Path, state: AgentState | None = None) -> dict
     }
 
 
-def write_health(state_dir: str | Path, state: AgentState | None = None, *, path: str | Path | None = None) -> Path:
+def write_health(
+    state_dir: str | Path, state: AgentState | None = None, *, path: str | Path | None = None
+) -> Path:
     sd = Path(state_dir)
     out_path = Path(path) if path else (sd / "health.json")
     payload = build_health(sd, state=state)

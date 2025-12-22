@@ -38,7 +38,9 @@ class RequestSizeLimitMiddleware:
 
     def _resolve_limit(self, scope: Scope) -> int | None:
         app = scope.get("app")
-        limits: RequestSizeLimits | None = getattr(getattr(app, "state", None), "request_size_limits", None)
+        limits: RequestSizeLimits | None = getattr(
+            getattr(app, "state", None), "request_size_limits", None
+        )
         if not limits:
             return None
 
@@ -66,7 +68,11 @@ class RequestSizeLimitMiddleware:
                 if content_length > limit:
                     resp = JSONResponse(
                         status_code=HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        content={"detail": "Request body too large", "limit": limit, "received": content_length},
+                        content={
+                            "detail": "Request body too large",
+                            "limit": limit,
+                            "received": content_length,
+                        },
                     )
                     await resp(scope, receive, send)
                     return
@@ -92,6 +98,10 @@ class RequestSizeLimitMiddleware:
         except RequestEntityTooLarge as exc:
             resp = JSONResponse(
                 status_code=HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                content={"detail": "Request body too large", "limit": exc.limit, "received": exc.received},
+                content={
+                    "detail": "Request body too large",
+                    "limit": exc.limit,
+                    "received": exc.received,
+                },
             )
             await resp(scope, receive, send)

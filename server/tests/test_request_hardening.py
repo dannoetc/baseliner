@@ -39,7 +39,9 @@ def _minimal_report_payload() -> dict:
 def test_request_size_limit_rejects_oversized_body(client: TestClient):
     # Force a tiny limit so we can exercise the middleware.
     original = client.app.state.request_size_limits
-    client.app.state.request_size_limits = RequestSizeLimits(default_max_bytes=100, device_reports_max_bytes=100)
+    client.app.state.request_size_limits = RequestSizeLimits(
+        default_max_bytes=100, device_reports_max_bytes=100
+    )
     try:
         # Not valid JSON, but that doesn't matter: the size check happens before parsing.
         resp = client.post(

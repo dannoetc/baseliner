@@ -1,11 +1,9 @@
 import os
 import sys
+from logging.config import fileConfig
 from pathlib import Path
 
-from logging.config import fileConfig
-
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
@@ -14,11 +12,11 @@ from alembic import context
 config = context.config
 
 # Allow overriding sqlalchemy.url via env (useful for docker compose / CI)
-_db_url = (os.environ.get("DATABASE_URL") or os.environ.get("database_url"))
+_db_url = os.environ.get("DATABASE_URL") or os.environ.get("database_url")
 if _db_url:
     config.set_main_option("sqlalchemy.url", _db_url)
 
-BASE_DIR = Path(__file__).resolve().parents[1]   # .../server
+BASE_DIR = Path(__file__).resolve().parents[1]  # .../server
 SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
 
@@ -32,8 +30,8 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-from baseliner_server.db.base import Base
 from baseliner_server.db import models  # noqa: F401 (ensures model import)
+from baseliner_server.db.base import Base
 
 target_metadata = Base.metadata
 
@@ -41,7 +39,6 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-
 
 
 def run_migrations_offline() -> None:
@@ -82,9 +79,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()

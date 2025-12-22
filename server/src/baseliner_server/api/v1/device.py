@@ -5,18 +5,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 # NOTE: dependencies live in api.deps; core.auth only contains the auth logic.
 from baseliner_server.api.deps import get_current_device, get_db
+from baseliner_server.db.models import Device, LogEvent, Run, RunItem, RunStatus, StepStatus
 from baseliner_server.middleware.rate_limit import enforce_device_reports_rate_limit
-from baseliner_server.services.policy_compiler import compile_effective_policy
-from baseliner_server.db.models import Device, LogEvent, Run, RunItem
-from baseliner_server.db.models import StepStatus, RunStatus
 from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.report import SubmitReportRequest, SubmitReportResponse
-
+from baseliner_server.services.policy_compiler import compile_effective_policy
 
 router = APIRouter(tags=["device"])
 
@@ -107,7 +104,9 @@ def _is_item_failed(item: Any) -> bool:
         return False
 
 
-def _normalize_run_status(payload_status: str | None, *, items_total: int, items_failed: int) -> RunStatus:
+def _normalize_run_status(
+    payload_status: str | None, *, items_total: int, items_failed: int
+) -> RunStatus:
     """Normalize run status for storage.
 
     Device reports should always represent a completed execution.
@@ -162,10 +161,14 @@ def submit_report(
     # Authoritative counts from items (do not trust client summary).
     items_total_calc = len(payload.items or [])
     items_failed_calc = sum(1 for it in (payload.items or []) if _is_item_failed(it))
-    items_changed_calc = sum(1 for it in (payload.items or []) if bool(getattr(it, "changed", False)))
+    items_changed_calc = sum(
+        1 for it in (payload.items or []) if bool(getattr(it, "changed", False))
+    )
 
     ended_at = payload.ended_at or utcnow()
-    status = _normalize_run_status(payload.status, items_total=items_total_calc, items_failed=items_failed_calc)
+    status = _normalize_run_status(
+        payload.status, items_total=items_total_calc, items_failed=items_failed_calc
+    )
 
     summary = payload.summary or {}
     if not isinstance(summary, dict):
@@ -201,7 +204,7 @@ def submit_report(
 
     # Items (we store ordinal so logs can reference it)
     ordinal_to_item_id: dict[int, uuid.UUID] = {}
-    for item in (payload.items or []):
+    for item in payload.items or []:
         run_item = RunItem(
             run_id=run.id,
             resource_type=item.resource_type,
@@ -234,11 +237,15 @@ def submit_report(
                 ts=utcnow(),
                 level="warning",
                 message="server normalized run status",
-                data={"reported": payload.status, "stored": status.value, "items_failed": items_failed_calc},
+                data={
+                    "reported": payload.status,
+                    "stored": status.value,
+                    "items_failed": items_failed_calc,
+                },
             )
         )
 
-    for log in (payload.logs or []):
+    for log in payload.logs or []:
         run_item_id = None
         if log.run_item_ordinal is not None:
             run_item_id = ordinal_to_item_id.get(log.run_item_ordinal)

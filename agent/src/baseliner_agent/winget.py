@@ -218,7 +218,9 @@ def _clean_output(text: str) -> str:
         if _SPINNER_LINE_RE.match(line):
             continue
 
-        if _PROGRESS_HINT_RE.search(line) and (_BLOCK_CHARS_RE.search(line) or _GARBLED_BLOCK_RE.search(line)):
+        if _PROGRESS_HINT_RE.search(line) and (
+            _BLOCK_CHARS_RE.search(line) or _GARBLED_BLOCK_RE.search(line)
+        ):
             continue
 
         if (_BLOCK_CHARS_RE.search(line) or _GARBLED_BLOCK_RE.search(line)) and len(line) > 40:
@@ -388,7 +390,9 @@ def _is_list_no_match(r: WingetResult) -> bool:
     return False
 
 
-def _maybe_fix_msstore_geo_and_retry(result: WingetResult, retry_args: list[str], *, timeout_s: int) -> WingetResult:
+def _maybe_fix_msstore_geo_and_retry(
+    result: WingetResult, retry_args: list[str], *, timeout_s: int
+) -> WingetResult:
     combined = f"{result.stdout}\n{result.stderr}"
     if _MSSTORE_GEO_ERROR_RE.search(combined):
         _ensure_msstore_region()
@@ -428,7 +432,6 @@ def list_package(
     if _is_list_no_match(r):
         return WingetResult(exit_code=0, stdout=r.stdout, stderr=r.stderr)
     return r
-
 
 
 def show_package(
@@ -509,7 +512,6 @@ def install_package(
         args.extend(["--source", source])
     res = _run(args, timeout_s=timeout_s)
     return _maybe_fix_msstore_geo_and_retry(res, args, timeout_s=timeout_s)
-
 
 
 def upgrade_package(

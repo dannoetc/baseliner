@@ -5,9 +5,9 @@ Revises: f3a1d2c4b5e6
 Create Date: 2025-12-20
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "6b7c8d9e0f1a"
@@ -28,8 +28,12 @@ def upgrade() -> None:
     op.add_column("devices", sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("devices", sa.Column("deleted_reason", sa.Text(), nullable=True))
 
-    op.add_column("devices", sa.Column("token_revoked_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("devices", sa.Column("revoked_auth_token_hash", sa.String(length=255), nullable=True))
+    op.add_column(
+        "devices", sa.Column("token_revoked_at", sa.DateTime(timezone=True), nullable=True)
+    )
+    op.add_column(
+        "devices", sa.Column("revoked_auth_token_hash", sa.String(length=255), nullable=True)
+    )
 
     op.create_index("ix_devices_status", "devices", ["status"])
     op.create_index("ix_devices_token_revoked_at", "devices", ["token_revoked_at"])

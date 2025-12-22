@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 import os
+import re
 from typing import Any
 
 from baseliner_agent.engine import ItemResult
@@ -169,7 +169,10 @@ class WingetPackageHandler:
                 "started_at": started_at,
                 "ended_at": ended_at,
                 "evidence": {},
-                "error": {"type": "invalid_resource", "message": "winget.package missing package_id"},
+                "error": {
+                    "type": "invalid_resource",
+                    "message": "winget.package missing package_id",
+                },
             }
             logs = [
                 {
@@ -222,7 +225,11 @@ class WingetPackageHandler:
         # Fall back to a presence check by scanning tokens if parse returns None.
         if not installed and detect.exit_code == 0:
             pid = package_id.strip().lower()
-            installed = any(pid == (tok.lower()) for ln in (detect.stdout or "").splitlines() for tok in ln.split())
+            installed = any(
+                pid == (tok.lower())
+                for ln in (detect.stdout or "").splitlines()
+                for tok in ln.split()
+            )
 
         if ensure == "present":
             if pinned_version:
@@ -264,7 +271,9 @@ class WingetPackageHandler:
             err_type = "timeout" if detect.exit_code == 124 else "winget_unavailable"
             error = {
                 "type": err_type,
-                "message": "winget detect timed out" if err_type == "timeout" else "winget failed to execute (often happens under SYSTEM/session 0)",
+                "message": "winget detect timed out"
+                if err_type == "timeout"
+                else "winget failed to execute (often happens under SYSTEM/session 0)",
                 "detail": truncate(err_text),
                 "exit_code": detect.exit_code,
             }
@@ -325,7 +334,7 @@ class WingetPackageHandler:
                 return (True, "uninstall")
             return (False, None)
 
-        need, action = (need_remediate_present() if ensure == "present" else need_remediate_absent())
+        need, action = need_remediate_present() if ensure == "present" else need_remediate_absent()
 
         if mode == "audit":
             logs.append(
@@ -333,7 +342,12 @@ class WingetPackageHandler:
                     "ts": utcnow_iso(),
                     "level": "info",
                     "message": "Audit mode; skipping remediation",
-                    "data": {"id": rid, "package_id": package_id, "source": source, "ensure": ensure},
+                    "data": {
+                        "id": rid,
+                        "package_id": package_id,
+                        "source": source,
+                        "ensure": ensure,
+                    },
                     "run_item_ordinal": ordinal,
                 }
             )
@@ -353,7 +367,9 @@ class WingetPackageHandler:
                     )
 
                 elif action == "reinstall_pinned":
-                    rem1 = uninstall_package(package_id, source=source, timeout_s=remediate_timeout_s)
+                    rem1 = uninstall_package(
+                        package_id, source=source, timeout_s=remediate_timeout_s
+                    )
                     rem2 = install_package(
                         package_id,
                         source=source,
@@ -363,9 +379,21 @@ class WingetPackageHandler:
                     )
 
                     class _Combo:
-                        exit_code = 0 if (rem1.exit_code == 0 and rem2.exit_code == 0) else (rem2.exit_code or rem1.exit_code or 1)
-                        stdout = (rem1.stdout or "") + ("\n---\n" if (rem1.stdout and rem2.stdout) else "") + (rem2.stdout or "")
-                        stderr = (rem1.stderr or "") + ("\n---\n" if (rem1.stderr and rem2.stderr) else "") + (rem2.stderr or "")
+                        exit_code = (
+                            0
+                            if (rem1.exit_code == 0 and rem2.exit_code == 0)
+                            else (rem2.exit_code or rem1.exit_code or 1)
+                        )
+                        stdout = (
+                            (rem1.stdout or "")
+                            + ("\n---\n" if (rem1.stdout and rem2.stdout) else "")
+                            + (rem2.stdout or "")
+                        )
+                        stderr = (
+                            (rem1.stderr or "")
+                            + ("\n---\n" if (rem1.stderr and rem2.stderr) else "")
+                            + (rem2.stderr or "")
+                        )
 
                     rem = _Combo()
                     evidence["remediate_steps"] = [
@@ -391,7 +419,9 @@ class WingetPackageHandler:
                     rem = upgrade_package(package_id, source=source, timeout_s=remediate_timeout_s)
 
                 elif action == "uninstall":
-                    rem = uninstall_package(package_id, source=source, timeout_s=remediate_timeout_s)
+                    rem = uninstall_package(
+                        package_id, source=source, timeout_s=remediate_timeout_s
+                    )
 
                 else:
                     rem = None
@@ -399,7 +429,10 @@ class WingetPackageHandler:
                 if rem is None:
                     success = False
                     status_remediate = "fail"
-                    error = {"type": "invalid_action", "message": f"Unknown remediation action: {action}"}
+                    error = {
+                        "type": "invalid_action",
+                        "message": f"Unknown remediation action: {action}",
+                    }
                 else:
                     status_remediate = "ok" if rem.exit_code == 0 else "fail"
                     evidence["remediate"] = {
@@ -439,7 +472,9 @@ class WingetPackageHandler:
         installed_after = bool(ver_after) and val.exit_code == 0
         if not installed_after and val.exit_code == 0:
             pid = package_id.strip().lower()
-            installed_after = any(pid == (tok.lower()) for ln in (val.stdout or "").splitlines() for tok in ln.split())
+            installed_after = any(
+                pid == (tok.lower()) for ln in (val.stdout or "").splitlines() for tok in ln.split()
+            )
 
         if ensure == "present":
             if pinned_version:
@@ -470,14 +505,19 @@ class WingetPackageHandler:
         if ensure == "present":
             if not installed_after:
                 success = False
-                error = error or {"type": "not_installed_after", "message": "Package still not installed after remediation"}
+                error = error or {
+                    "type": "not_installed_after",
+                    "message": "Package still not installed after remediation",
+                }
             elif pinned_version and not _version_eq(ver_after, pinned_version):
                 success = False
                 error = error or {
                     "type": "wrong_version_after",
                     "message": f"Package version '{ver_after}' does not match pinned '{pinned_version}' after remediation",
                 }
-            elif allow_upgrade and min_version and ver_after and _version_lt(ver_after, min_version):
+            elif (
+                allow_upgrade and min_version and ver_after and _version_lt(ver_after, min_version)
+            ):
                 success = False
                 error = error or {
                     "type": "below_min_version_after",
@@ -486,7 +526,10 @@ class WingetPackageHandler:
 
         if ensure == "absent" and installed_after:
             success = False
-            error = error or {"type": "still_installed_after", "message": "Package still installed after remediation"}
+            error = error or {
+                "type": "still_installed_after",
+                "message": "Package still installed after remediation",
+            }
 
         ended_at = utcnow_iso()
 

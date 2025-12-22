@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
 from baseliner_server.db.models import Device, Run, RunStatus
-import httpx 
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -23,12 +25,9 @@ def _admin_devices_path(client) -> str:
     raise AssertionError("admin/devices route not registered on the app")
 
 
-import httpx
-
 def _get_devices(client, qs: str) -> httpx.Response:
     path = _admin_devices_path(client)
     return client.get(f"{path}{qs}")
-
 
 
 def _create_device(db, *, device_key: str, last_seen_at: datetime | None) -> Device:

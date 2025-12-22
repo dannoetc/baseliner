@@ -17,7 +17,12 @@ def _find_route_path(client: TestClient, *, suffix: str, method: str) -> str:
     for r in getattr(client.app, "routes", []):
         path = getattr(r, "path", None)
         methods = getattr(r, "methods", None)
-        if isinstance(path, str) and path.endswith(suffix) and methods and method.upper() in methods:
+        if (
+            isinstance(path, str)
+            and path.endswith(suffix)
+            and methods
+            and method.upper() in methods
+        ):
             return path
     raise AssertionError(f"route not registered: {method} *{suffix}")
 

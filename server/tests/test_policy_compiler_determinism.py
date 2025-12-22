@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from baseliner_server.services.policy_compiler import compile_effective_policy
 from baseliner_server.db.models import AssignmentMode, Device, Policy, PolicyAssignment
+from baseliner_server.services.policy_compiler import compile_effective_policy
 
 
 def utcnow() -> datetime:
@@ -40,10 +40,10 @@ def _create_policy(db, *, name: str, resource_name: str) -> Policy:
             "resources": [
                 {
                     "type": "winget.package",
-                    "id": "mozilla.firefox",           # ensure same resource key across policies
+                    "id": "mozilla.firefox",  # ensure same resource key across policies
                     "package_id": "Mozilla.Firefox",
                     "ensure": "present",
-                    "name": resource_name,            # distinguish winner
+                    "name": resource_name,  # distinguish winner
                 }
             ]
         },
@@ -79,7 +79,7 @@ def _assign(
 
 def _compiled_first_resource_name(snap) -> str:
     doc = snap.policy or {}
-    res = (doc.get("resources") or [])
+    res = doc.get("resources") or []
     assert isinstance(res, list) and res, "compiled policy has no resources"
     first = res[0]
     assert isinstance(first, dict)

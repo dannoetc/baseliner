@@ -5,7 +5,15 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from baseliner_server.db.models import Device, Run, RunItem, LogEvent, RunStatus, StepStatus, LogLevel
+from baseliner_server.db.models import (
+    Device,
+    LogEvent,
+    LogLevel,
+    Run,
+    RunItem,
+    RunStatus,
+    StepStatus,
+)
 
 
 def _utc_naive(dt: datetime) -> datetime:

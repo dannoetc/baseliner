@@ -9,7 +9,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-
 CORRELATION_ID_HEADER = "X-Correlation-ID"
 
 # Safe id: 1-128 chars, starts with alnum, allow alnum . _ -

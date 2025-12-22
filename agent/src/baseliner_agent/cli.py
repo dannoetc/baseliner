@@ -1,19 +1,18 @@
-import json
-import random
-import time
-
 import argparse
+import json
 import os
+import random
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from .agent import enroll_device, run_once
-from .state import default_state_dir, AgentState
-from .config import load_config, default_config_path, merge_tags
-from .winget import configure_winget
 from .agent_health import build_health, write_health
+from .config import default_config_path, load_config, merge_tags
+from .state import AgentState, default_state_dir
 from .support_bundle import create_support_bundle, default_bundle_path
+from .winget import configure_winget
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,7 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     # Apply winget config ASAP so agent run uses SYSTEM-safe winget path if configured.
     configure_winget(getattr(cfg, "winget_path", None))
 
-    parser = argparse.ArgumentParser(prog="baseliner-agent", description="Baseliner Windows agent (MVP)")
+    parser = argparse.ArgumentParser(
+        prog="baseliner-agent", description="Baseliner Windows agent (MVP)"
+    )
     parser.add_argument(
         "--config",
         default=str(cfg_path),
@@ -52,7 +53,9 @@ def main(argv: list[str] | None = None) -> int:
     h_sub = p_h.add_subparsers(dest="health_cmd", required=True)
     h_sub.add_parser("show", help="Print current agent health JSON (computed locally)")
     h_write = h_sub.add_parser("write", help="Write health.json to state dir (atomic)")
-    h_write.add_argument("--path", default="", help="Optional output path (default: <state-dir>\\health.json)")
+    h_write.add_argument(
+        "--path", default="", help="Optional output path (default: <state-dir>\\health.json)"
+    )
 
     # ENROLL
     p_enroll = sub.add_parser("enroll", help="Enroll this device using a one-time enrollment token")
@@ -68,7 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         default=cfg.enroll_token,
         help="One-time enroll token minted by admin endpoint",
     )
-    p_enroll.add_argument("--device-key", required=True, help="Stable unique device key (e.g. hostname or asset tag)")
+    p_enroll.add_argument(
+        "--device-key", required=True, help="Stable unique device key (e.g. hostname or asset tag)"
+    )
     p_enroll.add_argument(
         "--tags",
         default="",
@@ -83,10 +88,14 @@ def main(argv: list[str] | None = None) -> int:
         default=cfg.server_url,
         help="Baseliner server base URL (e.g. http://localhost:8000)",
     )
-    p_run.add_argument("--force", action="store_true", help="Run even if effectivePolicyHash unchanged")
+    p_run.add_argument(
+        "--force", action="store_true", help="Run even if effectivePolicyHash unchanged"
+    )
 
     # RUN-LOOP
-    p_loop = sub.add_parser("run-loop", help="Run continuously: poll policy and apply on an interval")
+    p_loop = sub.add_parser(
+        "run-loop", help="Run continuously: poll policy and apply on an interval"
+    )
     p_loop.add_argument(
         "--server",
         required=(cfg.server_url is None),
@@ -105,7 +114,9 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="Random extra sleep added each cycle in seconds (default: %(default)s)",
     )
-    p_loop.add_argument("--force", action="store_true", help="Run even if effectivePolicyHash unchanged")
+    p_loop.add_argument(
+        "--force", action="store_true", help="Run even if effectivePolicyHash unchanged"
+    )
 
     # SUPPORT-BUNDLE
     p_sb = sub.add_parser(
@@ -177,7 +188,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "run-loop":
             interval = int(args.interval)
             jitter = int(args.jitter)
-            print(f"[OK] Starting run-loop interval={interval}s jitter={jitter}s server={args.server}")
+            print(
+                f"[OK] Starting run-loop interval={interval}s jitter={jitter}s server={args.server}"
+            )
             while True:
                 run_once(server=args.server, state_dir=state_dir, force=args.force)
                 sleep_s = _sleep_with_jitter(interval, jitter)

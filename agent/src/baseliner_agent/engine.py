@@ -95,7 +95,10 @@ def _invalid_resource(res: dict[str, Any], *, ordinal: int) -> ItemResult:
         "started_at": started_at,
         "ended_at": utcnow_iso(),
         "evidence": {"resource": res},
-        "error": {"type": "invalid_resource", "message": "Resource missing required fields: type/id"},
+        "error": {
+            "type": "invalid_resource",
+            "message": "Resource missing required fields: type/id",
+        },
     }
     logs = [
         {

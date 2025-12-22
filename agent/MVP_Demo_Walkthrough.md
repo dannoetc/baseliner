@@ -1,10 +1,10 @@
 ## MVP Demo: enroll → assign baseline → run agent → debug & verify
 
 This walkthrough demonstrates the core operator loop:
-1) upsert a baseline policy  
-2) assign it to a device  
-3) run the agent (Scheduled Task)  
-4) verify via debug bundle + run detail  
+1) upsert a baseline policy
+2) assign it to a device
+3) run the agent (Scheduled Task)
+4) verify via debug bundle + run detail
 
 ### Prereqs
 - Server running locally at `http://localhost:8000`

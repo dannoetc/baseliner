@@ -4,15 +4,13 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import desc, func, select
-from sqlalchemy.orm import Session, joinedload
-
-from baseliner_server.services.policy_compiler import compile_effective_policy
-from baseliner_server.core.policy_validation import PolicyDocValidationError, validate_and_normalize_document
-from baseliner_server.schemas.device_runs import DeviceRunsResponse, RunRollup
-from baseliner_server.schemas.maintenance import PruneRequest, PruneResponse, PruneCounts
-from baseliner_server.core.policy_validation import PolicyDocValidationError, validate_and_normalize_document
+from sqlalchemy.orm import Session
 
 from baseliner_server.api.deps import get_db, hash_token, require_admin
+from baseliner_server.core.policy_validation import (
+    PolicyDocValidationError,
+    validate_and_normalize_document,
+)
 from baseliner_server.db.models import (
     AssignmentMode,
     Device,
@@ -27,25 +25,28 @@ from baseliner_server.db.models import (
 from baseliner_server.schemas.admin import (
     AssignPolicyRequest,
     AssignPolicyResponse,
+    ClearAssignmentsResponse,
     CreateEnrollTokenRequest,
     CreateEnrollTokenResponse,
-    DeviceAssignmentsResponse,
-    ClearAssignmentsResponse,
     DeleteDeviceResponse,
-    PolicyAssignmentOut,
+    DeviceAssignmentsResponse,
     DeviceDebugResponse,
     PolicyAssignmentDebugOut,
+    PolicyAssignmentOut,
     RunDebugSummary,
 )
 from baseliner_server.schemas.admin_list import (
-    DeviceSummary,
     DevicesListResponse,
-    RunSummary,
+    DeviceSummary,
     RunsListResponse,
+    RunSummary,
 )
+from baseliner_server.schemas.device_runs import DeviceRunsResponse, RunRollup
+from baseliner_server.schemas.maintenance import PruneCounts, PruneRequest, PruneResponse
 from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.policy_admin import UpsertPolicyRequest, UpsertPolicyResponse
-from baseliner_server.schemas.run_detail import RunDetailResponse, RunItemDetail, LogEventDetail
+from baseliner_server.schemas.run_detail import LogEventDetail, RunDetailResponse, RunItemDetail
+from baseliner_server.services.policy_compiler import compile_effective_policy
 
 router = APIRouter(tags=["admin"])
 
@@ -92,7 +93,9 @@ def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
     response_model=CreateEnrollTokenResponse,
     dependencies=[Depends(require_admin)],
 )
-def create_enroll_token(payload: CreateEnrollTokenRequest, db: Session = Depends(get_db)) -> CreateEnrollTokenResponse:
+def create_enroll_token(
+    payload: CreateEnrollTokenRequest, db: Session = Depends(get_db)
+) -> CreateEnrollTokenResponse:
     raw = secrets.token_urlsafe(24)
     tok = EnrollToken(
         token_hash=hash_token(raw),
@@ -111,7 +114,9 @@ def create_enroll_token(payload: CreateEnrollTokenRequest, db: Session = Depends
     response_model=AssignPolicyResponse,
     dependencies=[Depends(require_admin)],
 )
-def assign_policy(payload: AssignPolicyRequest, db: Session = Depends(get_db)) -> AssignPolicyResponse:
+def assign_policy(
+    payload: AssignPolicyRequest, db: Session = Depends(get_db)
+) -> AssignPolicyResponse:
     device = db.scalar(select(Device).where(Device.id == payload.device_id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -123,7 +128,11 @@ def assign_policy(payload: AssignPolicyRequest, db: Session = Depends(get_db)) -
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
 
-    mode = AssignmentMode.enforce if (payload.mode or "").lower() == "enforce" else AssignmentMode.audit
+    mode = (
+        AssignmentMode.enforce
+        if (payload.mode or "").lower() == "enforce"
+        else AssignmentMode.audit
+    )
 
     existing = db.scalar(
         select(PolicyAssignment).where(
@@ -224,7 +233,9 @@ def clear_device_assignments(
 )
 def delete_device(
     device_id: str = Path(..., description="Device UUID"),
-    reason: str | None = Query(None, description="Optional deletion reason (stored for audit/debug)"),
+    reason: str | None = Query(
+        None, description="Optional deletion reason (stored for audit/debug)"
+    ),
     db: Session = Depends(get_db),
 ) -> DeleteDeviceResponse:
     """Soft-delete (deactivate) a device and revoke its current device token.
@@ -361,9 +372,7 @@ def debug_device_bundle(
     if last_run:
         items = list(
             db.scalars(
-                select(RunItem)
-                .where(RunItem.run_id == last_run.id)
-                .order_by(RunItem.ordinal.asc())
+                select(RunItem).where(RunItem.run_id == last_run.id).order_by(RunItem.ordinal.asc())
             ).all()
         )
 
@@ -449,7 +458,6 @@ def debug_device_bundle(
         last_run_items=last_items_out,
     )
 
-
     assignments_out: list[PolicyAssignmentDebugOut] = []
     for a, pol in rows:
         assignments_out.append(
@@ -503,9 +511,7 @@ def debug_device_bundle(
 
         items = list(
             db.scalars(
-                select(RunItem)
-                .where(RunItem.run_id == last_run.id)
-                .order_by(RunItem.ordinal.asc())
+                select(RunItem).where(RunItem.run_id == last_run.id).order_by(RunItem.ordinal.asc())
             ).all()
         )
 
@@ -604,9 +610,7 @@ def list_device_runs(
             # Best-effort compute from items (small limits; acceptable for admin).
             its = list(
                 db.scalars(
-                    select(RunItem)
-                    .where(RunItem.run_id == r.id)
-                    .order_by(RunItem.ordinal.asc())
+                    select(RunItem).where(RunItem.run_id == r.id).order_by(RunItem.ordinal.asc())
                 ).all()
             )
             if items_total is None:
@@ -616,6 +620,7 @@ def list_device_runs(
                 items_changed = sum(1 for it in its if bool(it.changed))
 
             if items_failed is None:
+
                 def _it_failed(it: RunItem) -> bool:
                     try:
                         err = it.error or {}
@@ -626,7 +631,11 @@ def list_device_runs(
                             s = ("" if v is None else _status(v) or str(v)).strip().lower()
                             return s in ("fail", "failed")
 
-                        return _sf(it.status_detect) or _sf(it.status_remediate) or _sf(it.status_validate)
+                        return (
+                            _sf(it.status_detect)
+                            or _sf(it.status_remediate)
+                            or _sf(it.status_validate)
+                        )
                     except Exception:
                         return False
 
@@ -665,7 +674,9 @@ def list_device_runs(
     response_model=UpsertPolicyResponse,
     dependencies=[Depends(require_admin)],
 )
-def upsert_policy(payload: UpsertPolicyRequest, db: Session = Depends(get_db)) -> UpsertPolicyResponse:
+def upsert_policy(
+    payload: UpsertPolicyRequest, db: Session = Depends(get_db)
+) -> UpsertPolicyResponse:
     existing = db.scalar(select(Policy).where(Policy.name == payload.name))
 
     try:
@@ -687,7 +698,9 @@ def upsert_policy(payload: UpsertPolicyRequest, db: Session = Depends(get_db)) -
         existing.updated_at = utcnow()
         db.add(existing)
         db.commit()
-        return UpsertPolicyResponse(policy_id=str(existing.id), name=existing.name, is_active=existing.is_active)
+        return UpsertPolicyResponse(
+            policy_id=str(existing.id), name=existing.name, is_active=existing.is_active
+        )
 
     policy = Policy(
         name=payload.name,
@@ -700,8 +713,9 @@ def upsert_policy(payload: UpsertPolicyRequest, db: Session = Depends(get_db)) -
     )
     db.add(policy)
     db.commit()
-    return UpsertPolicyResponse(policy_id=str(policy.id), name=policy.name, is_active=policy.is_active)
-
+    return UpsertPolicyResponse(
+        policy_id=str(policy.id), name=policy.name, is_active=policy.is_active
+    )
 
 
 @router.get(
@@ -737,7 +751,7 @@ def list_devices(
         description="If true, include soft-deleted devices in the list.",
     ),
 ) -> DevicesListResponse:
-    from baseliner_server.schemas.admin_list import RunSummaryLite, DeviceHealth
+    from baseliner_server.schemas.admin_list import DeviceHealth, RunSummaryLite
 
     runs_ranked = (
         select(
@@ -761,7 +775,9 @@ def list_devices(
         stmt = stmt.where(Device.status == DeviceStatus.active)
 
     stmt = (
-        stmt.outerjoin(runs_ranked, (runs_ranked.c.device_id == Device.id) & (runs_ranked.c.rn == 1))
+        stmt.outerjoin(
+            runs_ranked, (runs_ranked.c.device_id == Device.id) & (runs_ranked.c.rn == 1)
+        )
         .order_by(desc(Device.last_seen_at), desc(Device.enrolled_at))
         .offset(offset)
         .limit(limit)
@@ -924,8 +940,16 @@ def get_run_detail(
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    items = list(db.scalars(select(RunItem).where(RunItem.run_id == run.id).order_by(RunItem.ordinal.asc())).all())
-    logs = list(db.scalars(select(LogEvent).where(LogEvent.run_id == run.id).order_by(LogEvent.ts.asc())).all())
+    items = list(
+        db.scalars(
+            select(RunItem).where(RunItem.run_id == run.id).order_by(RunItem.ordinal.asc())
+        ).all()
+    )
+    logs = list(
+        db.scalars(
+            select(LogEvent).where(LogEvent.run_id == run.id).order_by(LogEvent.ts.asc())
+        ).all()
+    )
 
     return RunDetailResponse(
         id=str(run.id),
@@ -971,6 +995,7 @@ def get_run_detail(
         ],
     )
 
+
 @router.post(
     "/admin/compile",
     dependencies=[Depends(require_admin)],
@@ -989,10 +1014,11 @@ def compile_policy_for_device(device_id: str, db: Session = Depends(get_db)) -> 
     snap = compile_effective_policy(db, dev)
     return {"device_id": str(dev.id), "mode": snap.mode, "policy": snap.policy, "meta": snap.meta}
 
+
 def _chunked(seq: list[Any], size: int) -> list[list[Any]]:
     if size <= 0:
         return [seq]
-    return [seq[i:i + size] for i in range(0, len(seq), size)]
+    return [seq[i : i + size] for i in range(0, len(seq), size)]
 
 
 @router.post(
@@ -1054,9 +1080,7 @@ def prune_runs(payload: PruneRequest, db: Session = Depends(get_db)) -> PruneRes
 
     if run_ids:
         counts_items = int(
-            db.scalar(
-                select(func.count()).select_from(RunItem).where(RunItem.run_id.in_(run_ids))
-            )
+            db.scalar(select(func.count()).select_from(RunItem).where(RunItem.run_id.in_(run_ids)))
             or 0
         )
         counts_logs = int(
@@ -1077,7 +1101,6 @@ def prune_runs(payload: PruneRequest, db: Session = Depends(get_db)) -> PruneRes
             notes={"mode": "dry_run"},
         )
 
-
     deleted_logs = 0
     deleted_items = 0
     deleted_runs = 0
@@ -1087,33 +1110,25 @@ def prune_runs(payload: PruneRequest, db: Session = Depends(get_db)) -> PruneRes
             continue
 
         deleted_logs += int(
-            db.query(LogEvent)
-            .filter(LogEvent.run_id.in_(chunk))
-            .delete(synchronize_session=False)
+            db.query(LogEvent).filter(LogEvent.run_id.in_(chunk)).delete(synchronize_session=False)
             or 0
         )
         deleted_items += int(
-            db.query(RunItem)
-            .filter(RunItem.run_id.in_(chunk))
-            .delete(synchronize_session=False)
+            db.query(RunItem).filter(RunItem.run_id.in_(chunk)).delete(synchronize_session=False)
             or 0
         )
         deleted_runs += int(
-            db.query(Run)
-            .filter(Run.id.in_(chunk))
-            .delete(synchronize_session=False)
-            or 0
+            db.query(Run).filter(Run.id.in_(chunk)).delete(synchronize_session=False) or 0
         )
 
     db.commit()
 
     return PruneResponse(
-    dry_run=False,
-    keep_days=int(payload.keep_days),
-    keep_runs_per_device=int(payload.keep_runs_per_device),
-    cutoff=cutoff,
-    runs_targeted=runs_targeted,
-    counts=PruneCounts(runs=deleted_runs, run_items=deleted_items, log_events=deleted_logs),
-    notes={"mode": "deleted"},
-)
-
+        dry_run=False,
+        keep_days=int(payload.keep_days),
+        keep_runs_per_device=int(payload.keep_runs_per_device),
+        cutoff=cutoff,
+        runs_targeted=runs_targeted,
+        counts=PruneCounts(runs=deleted_runs, run_items=deleted_items, log_events=deleted_logs),
+        notes={"mode": "deleted"},
+    )

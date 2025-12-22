@@ -4,7 +4,6 @@ from typing import Any, Callable, Mapping
 
 import requests
 
-
 LogFn = Callable[[dict[str, Any]], None]
 
 
@@ -134,7 +133,7 @@ class ApiClient:
                 )
 
                 if attempt < retries:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
                 raise last_exc
 

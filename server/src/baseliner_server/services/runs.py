@@ -20,8 +20,8 @@ from fastapi import HTTPException
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, joinedload
 
-from baseliner_server.db.models import LogEvent, Run, RunItem
-from baseliner_server.schemas.admin_list import RunSummary, RunsListResponse
+from baseliner_server.db.models import Run, RunItem
+from baseliner_server.schemas.admin_list import RunsListResponse, RunSummary
 from baseliner_server.schemas.run_detail import LogEventDetail, RunItemDetail, RunOutFull
 
 

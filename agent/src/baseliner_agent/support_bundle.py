@@ -178,7 +178,9 @@ def _collect_policy_summary(state_dir: Path) -> dict[str, Any]:
     device_id = _find_first_key(state, {"device_id", "deviceId"})
 
     last_effective_policy_hash = (
-        _norm(last_policy_hash) or _norm(last_applied_policy_hash) or _norm(last_reported_policy_hash)
+        _norm(last_policy_hash)
+        or _norm(last_applied_policy_hash)
+        or _norm(last_reported_policy_hash)
     )
 
     return {
@@ -300,7 +302,11 @@ def create_support_bundle(
 
     queue_dir = sd / "queue"
     queued = list(_iter_files_under(queue_dir, pattern="*.json")) if include_queue else []
-    queued = _filter_by_mtime(queued, since_epoch=since_epoch) if include_queue and since_hours else queued
+    queued = (
+        _filter_by_mtime(queued, since_epoch=since_epoch)
+        if include_queue and since_hours
+        else queued
+    )
 
     token_dpapi = sd / "device_token.dpapi"
 
