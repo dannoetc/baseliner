@@ -42,6 +42,16 @@ Windows convenience wrapper:
 .\tools\dev-scripts\Dev-Up.ps1
 ```
 
+
+---
+
+## Docs
+
+Project documentation lives under `docs/`. Start here:
+
+- `docs/README.md`
+
+
 ---
 
 ## Server (local dev, without Docker API)
@@ -102,40 +112,12 @@ Windows convenience wrapper:
 4. Device runs resources and posts a **run report** (items + logs)
 5. Admin inspects devices/runs/run detail via admin endpoints
 
-### Device deactivation (soft delete)
-
-For lifecycle management, an admin can **deactivate** (soft-delete) a device. This revokes the device token and removes policy assignments, but preserves historical runs.
-
-Lifecycle endpoints:
-
-- Deactivate (soft delete): `DELETE /api/v1/admin/devices/{device_id}?reason=...`
-  - Revokes the current device token (agent gets a **403**) and removes policy assignments
-
-- Restore: `POST /api/v1/admin/devices/{device_id}/restore`
-  - Reactivates the device and **mints a new device token** (returned to the admin)
-
-- Revoke token (rotate): `POST /api/v1/admin/devices/{device_id}/revoke-token`
-  - Leaves the device active but revokes the current token and **returns a new token**
-
-Device endpoints (`/api/v1/device/*`) return **403** for deactivated devices and for requests using a revoked token.
-
-
-### Admin audit log
-
-Baseliner records a lightweight **audit log** for mutating admin actions (policy upserts, assignment changes, device deactivate/restore/revoke-token, maintenance prune). This is intended for operator visibility and troubleshooting — not a full SIEM replacement.
-
-- List audit events: `GET /api/v1/admin/audit`
-  - Query params: `limit` (default 100), `cursor` (pagination), `action`, `target_type`, `target_id`
-  - Ordered newest-first; `next_cursor` can be used to fetch the next page.
-
-
-
 ---
 
 ## Requirements
 
 - Windows dev machine (tested) for the agent
-- Python 3.12 for server + agent tooling
+- Python **3.12 only** for server + agent tooling
 - Postgres 16 (via Docker or local install) for the server
 
 ---
@@ -155,3 +137,7 @@ ruff check .
 mypy server/src agent/src
 pytest -q
 ```
+
+## Documentation
+
+Start with `docs/README.md`.
