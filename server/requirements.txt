@@ -1,21 +1,29 @@
 alembic==1.14.0
 annotated-types==0.7.0
 anyio==4.12.0
+-e git+https://github.com/dannoetc/baseliner.git@f3c42cb4fcb4269e12c29ca281d077454024dd5e#egg=baseliner_server&subdirectory=server
 certifi==2025.11.12
+cfgv==3.5.0
 click==8.3.1
 colorama==0.4.6
+distlib==0.4.0
 fastapi==0.115.6
+filelock==3.20.1
 greenlet==3.3.0
 h11==0.16.0
 httpcore==1.0.9
 httptools==0.7.1
 httpx==0.28.1
+identify==2.6.15
 idna==3.11
 iniconfig==2.3.0
 Mako==1.3.10
 MarkupSafe==3.0.3
+nodeenv==1.10.0
 packaging==25.0
+platformdirs==4.5.1
 pluggy==1.6.0
+pre_commit==4.5.1
 psycopg==3.2.3
 psycopg-binary==3.2.3
 pydantic==2.10.4
@@ -26,11 +34,12 @@ pytest==9.0.2
 python-dotenv==1.2.1
 python-json-logger==2.0.7
 PyYAML==6.0.3
+ruff==0.14.10
 SQLAlchemy==2.0.36
 starlette==0.41.3
 typing_extensions==4.15.0
 tzdata==2025.2
 uvicorn==0.32.1
+virtualenv==20.35.4
 watchfiles==1.1.1
 websockets==15.0.1
--e .
