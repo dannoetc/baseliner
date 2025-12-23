@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Core admin request/response models (defined here)
@@ -28,13 +28,47 @@ from pydantic import BaseModel
 
 
 class CreateEnrollTokenRequest(BaseModel):
+    # If provided, the token becomes invalid after this time.
     expires_at: datetime | None = None
+
+    # Convenience: if expires_at is omitted, server can compute expires_at = now + ttl_seconds.
+    ttl_seconds: int | None = None
+
     note: str | None = None
 
 
 class CreateEnrollTokenResponse(BaseModel):
     enroll_token: str
     expires_at: datetime | None = None
+
+
+class EnrollTokenSummary(BaseModel):
+    id: str
+    created_at: datetime
+    expires_at: datetime | None = None
+    used_at: datetime | None = None
+    used_by_device_id: str | None = None
+    note: str | None = None
+    is_used: bool
+    is_expired: bool
+
+
+class EnrollTokensListResponse(BaseModel):
+    items: list[EnrollTokenSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class RevokeEnrollTokenRequest(BaseModel):
+    reason: str | None = None
+
+
+class RevokeEnrollTokenResponse(BaseModel):
+    token_id: str
+    revoked_at: datetime
+    expires_at: datetime | None = None
+    note: str | None = None
 
 
 class AssignPolicyRequest(BaseModel):
@@ -87,6 +121,22 @@ class RestoreDeviceResponse(BaseModel):
     status: str
     restored_at: datetime
     device_token: str
+
+
+
+class DeviceAuthTokenSummary(BaseModel):
+    id: str
+    token_hash_prefix: str | None = None
+    created_at: datetime | None = None
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+    replaced_by_id: str | None = None
+    is_active: bool
+
+
+class DeviceTokensListResponse(BaseModel):
+    device_id: str
+    items: list[DeviceAuthTokenSummary] = Field(default_factory=list)
 
 
 class RevokeDeviceTokenResponse(BaseModel):
@@ -151,6 +201,8 @@ __all__ = [
     "RemoveAssignmentResponse",
     "DeleteDeviceResponse",
     "RestoreDeviceResponse",
+    "DeviceAuthTokenSummary",
+    "DeviceTokensListResponse",
     "RevokeDeviceTokenResponse",
     # policy upsert
     "UpsertPolicyRequest",

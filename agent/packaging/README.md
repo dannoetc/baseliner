@@ -7,11 +7,11 @@ Goals:
 - Provide install/uninstall PowerShell scripts suitable for:
   - RMM execution
   - Intune Win32 app install/uninstall command lines
-- Run the agent via a **Scheduled Task** for MVP (service can come later).
+- Run the agent via a **Scheduled Task** for MVP (a Windows service can come later).
 
 ## Build (PyInstaller)
 
-From `agent/`:
+From `agent\`:
 
 ```powershell
 pwsh -File .\packaging\Build-Agent.ps1
@@ -51,16 +51,41 @@ pwsh -File .\Install-BaselinerAgent.ps1 `
   -EnrollToken "<one-time-token>" `
   -DeviceKey $env:COMPUTERNAME `
   -Tags "env=dev,site=denver" `
-  -IntervalSeconds 900
+  -IntervalSeconds 900 `
+  -HeartbeatIntervalSeconds 60 `
+  -JitterSeconds 30
 ```
 
 Installs:
-- Binaries: `C:\Program Files\Baseliner\`
-- State/config/logs: `C:\ProgramData\Baseliner\`
+- Binaries: `C:\\Program Files\\Baseliner\\`
+- State/config/logs: `C:\\ProgramData\\Baseliner\\`
 - Scheduled task: `Baseliner Agent` (SYSTEM by default)
 
-Logs:
-- `C:\ProgramData\Baseliner\logs\agent.log`
+### What the Scheduled Task runs
+
+The installed Scheduled Task launches a **single long-lived** agent process at startup using:
+
+- `baseliner-agent run-loop`
+
+The cadence is controlled by `C:\\ProgramData\\Baseliner\\agent.toml`:
+
+- `poll_interval_seconds`
+- `heartbeat_interval_seconds` (set `0` to disable)
+- `jitter_seconds` (also used as a one-time startup jitter)
+
+To change cadence:
+
+1. Edit `agent.toml`
+2. Restart the Scheduled Task (`Baseliner Agent`) or reboot
+
+### Logs
+
+There are two useful logs:
+
+- Run-loop stdout/stderr captured by the Scheduled Task:
+  - `C:\\ProgramData\\Baseliner\\logs\\run-loop.log`
+- Structured agent event log (used by support bundles):
+  - `C:\\ProgramData\\Baseliner\\logs\\agent.log`
 
 ## Intune Win32 App
 
@@ -79,17 +104,15 @@ powershell.exe -ExecutionPolicy Bypass -File Uninstall-BaselinerAgent.ps1
 ```
 
 Detection rule suggestion:
-- File exists: `C:\Program Files\Baseliner\baseliner-agent.exe`
+- File exists: `C:\\Program Files\\Baseliner\\baseliner-agent.exe`
 
 ## Notes / Gotchas
 
-### Scheduled Task repetition compatibility
+### Editing `agent.toml`
 
-Some Windows builds do not support setting `trigger.RepetitionInterval` / `trigger.RepetitionDuration` properties directly.
+The installer **upserts** schedule keys into `agent.toml` if they are missing.
+This is safe to run on top of an existing install without blowing away unrelated keys.
 
-The installer uses a **version-tolerant** approach:
-- Prefer `New-ScheduledTaskTrigger -RepetitionInterval/-RepetitionDuration`
-- Fall back to attaching a `MSFT_TaskRepetitionPattern` object (`trigger.Repetition`)
+### Running PyInstaller as admin
 
-Also, repetition is most reliable when `IntervalSeconds` is divisible by 60.
-If not divisible, the installer rounds up to the next minute.
+PyInstaller prints a warning if you build as Administrator. Prefer running `Build-Agent.ps1` from a non-admin terminal.

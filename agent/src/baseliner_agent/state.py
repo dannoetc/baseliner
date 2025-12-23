@@ -51,6 +51,12 @@ class AgentState:
     # Handy breadcrumb for field debugging
     last_server_url: str | None = None
 
+    # --- Scheduler metadata (best-effort; written by run-loop) ---
+    apply_interval_seconds: int | None = None
+    heartbeat_interval_seconds: int | None = None
+    next_apply_due_at: str | None = None
+    next_heartbeat_due_at: str | None = None
+
     # Legacy field kept for backwards compatibility with older agent builds.
     # New code should prefer last_applied_policy_hash / last_reported_policy_hash.
     last_policy_hash: str | None = None
@@ -86,6 +92,20 @@ class AgentState:
         st.last_run_status = data.get("last_run_status")
         st.last_run_exit = data.get("last_run_exit")
         st.last_server_url = data.get("last_server_url")
+
+        # Scheduler metadata (all optional)
+        try:
+            v = data.get("apply_interval_seconds")
+            st.apply_interval_seconds = int(v) if v is not None else None
+        except Exception:
+            st.apply_interval_seconds = None
+        try:
+            v = data.get("heartbeat_interval_seconds")
+            st.heartbeat_interval_seconds = int(v) if v is not None else None
+        except Exception:
+            st.heartbeat_interval_seconds = None
+        st.next_apply_due_at = data.get("next_apply_due_at")
+        st.next_heartbeat_due_at = data.get("next_heartbeat_due_at")
 
         # Legacy field
         st.last_policy_hash = data.get("last_policy_hash")

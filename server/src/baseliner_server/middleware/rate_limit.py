@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 
 from baseliner_server.api.deps import get_db, hash_token
-from baseliner_server.db.models import Device
+from baseliner_server.db.models import Device, DeviceAuthToken
 
 
 @dataclass(frozen=True)
@@ -132,8 +132,24 @@ def _client_ip(request: Request) -> str:
 
 def _try_get_device_id(db: Session, token: str) -> str | None:
     token_h = hash_token(token)
-    # Fetch only the UUID (avoid loading full Device model)
-    device_id = db.scalar(select(Device.id).where(Device.auth_token_hash == token_h))
+
+    # Prefer token history table (includes revoked tokens, so we can still bucket requests
+    # by device for throttling even if the request will later be rejected).
+    device_id = db.scalar(
+        select(DeviceAuthToken.device_id).where(DeviceAuthToken.token_hash == token_h)
+    )
+    if device_id:
+        return str(device_id)
+
+    # Legacy fallback (pre-migration/test DBs).
+    device_id = db.scalar(
+        select(Device.id).where(
+            or_(
+                Device.auth_token_hash == token_h,
+                Device.revoked_auth_token_hash == token_h,
+            )
+        )
+    )
     return str(device_id) if device_id else None
 
 

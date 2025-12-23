@@ -56,7 +56,9 @@ ENV/
 agent/.venv-build/
 agent/.venv-build/*
 server/.venv/
+server/.venv/*
 agent/.venv/
+agent/.venv/*
 shared/.venv/
 
 # ------------------------------------------------------------

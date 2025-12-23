@@ -141,6 +141,10 @@ class Device(Base):
     )
     revoked_auth_token_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    auth_tokens: Mapped[list["DeviceAuthToken"]] = relationship(
+        back_populates="device", cascade="all, delete-orphan", order_by="DeviceAuthToken.created_at"
+    )
+
     runs: Mapped[list["Run"]] = relationship(back_populates="device", cascade="all, delete-orphan")
     assignments: Mapped[list["PolicyAssignment"]] = relationship(
         back_populates="device", cascade="all, delete-orphan"
@@ -150,6 +154,41 @@ class Device(Base):
         Index("ix_devices_last_seen_at", "last_seen_at"),
         Index("ix_devices_status", "status"),
         Index("ix_devices_token_revoked_at", "token_revoked_at"),
+    )
+
+
+class DeviceAuthToken(Base):
+    __tablename__ = "device_auth_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Store only a hash of the device auth token (unique across all devices).
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Last time this token successfully authenticated a device report (or other gated call).
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Link to the successor token (when rotated).
+    replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("device_auth_tokens.id", ondelete="SET NULL"), nullable=True
+    )
+
+    device: Mapped["Device"] = relationship(back_populates="auth_tokens", foreign_keys=[device_id])
+
+    __table_args__ = (
+        Index("ix_device_auth_tokens_device_id_created_at", "device_id", "created_at"),
+        Index("ix_device_auth_tokens_token_hash", "token_hash"),
+        Index("ix_device_auth_tokens_revoked_at", "revoked_at"),
     )
 
 

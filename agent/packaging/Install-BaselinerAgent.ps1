@@ -12,430 +12,356 @@ param(
     # Comma-separated tags, e.g. "env=dev,site=denver"
     [string]$Tags = "",
 
+    # Apply cadence (agent.toml: poll_interval_seconds)
     [int]$IntervalSeconds = 900,
-    [int]$JitterSeconds = 0,
 
-    [string]$TaskName = "Baseliner Agent",
+    # Heartbeat cadence (agent.toml: heartbeat_interval_seconds). 0 disables heartbeat.
+    [int]$HeartbeatIntervalSeconds = 60,
 
-    [ValidateSet("SYSTEM", "CURRENTUSER")]
-    [string]$RunAs = "SYSTEM",
+    # Jitter applied to scheduling (agent.toml: jitter_seconds). Also used as one-time startup jitter.
+    [int]$JitterSeconds = 60,
 
-    [switch]$ReEnroll,
-    [switch]$NoStart
+    # If set, re-enroll even if a device token exists.
+    [switch]$ReEnroll = $false,
+
+    # Start the Scheduled Task immediately after install.
+    [switch]$StartNow = $false,
+
+    # If set, do not attempt to enroll (useful if you are just updating files).
+    [switch]$SkipEnroll = $false
 )
 
-$ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
 function Test-IsAdministrator {
-    $current = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($current)
+    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function New-RepeatingTrigger {
+function Write-Utf8NoBom {
     param(
-        [Parameter(Mandatory)][datetime]$StartAt,
-        [Parameter(Mandatory)][int]$IntervalSeconds
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Content
     )
-
-    # Scheduled Tasks repetition is best-supported in minutes. Keep MVP simple.
-    if ($IntervalSeconds -lt 60) { throw "IntervalSeconds must be >= 60 for Scheduled Task repetition compatibility." }
-    if (($IntervalSeconds % 60) -ne 0) {
-        $rounded = [int][Math]::Ceiling($IntervalSeconds / 60.0) * 60
-        Write-Warning "IntervalSeconds ($IntervalSeconds) is not divisible by 60; rounding up to $rounded seconds."
-        $IntervalSeconds = $rounded
-    }
-
-    $interval = New-TimeSpan -Seconds $IntervalSeconds
-    $duration = New-TimeSpan -Days 3650
-
-    # Best path: pass repetition at construction time (works on newer builds)
-    try {
-        return New-ScheduledTaskTrigger -Once -At $StartAt -RepetitionInterval $interval -RepetitionDuration $duration
-    }
-    catch {
-        # Fallback: build and attach MSFT_TaskRepetitionPattern
-        $t = New-ScheduledTaskTrigger -Once -At $StartAt
-
-        $ns = "Root/Microsoft/Windows/TaskScheduler"
-        $rep = New-CimInstance -Namespace $ns -ClassName MSFT_TaskRepetitionPattern -ClientOnly -Property @{
-            Interval          = ("PT{0}S" -f [int]$interval.TotalSeconds)
-            Duration          = ("P{0}D" -f 3650)
-            StopAtDurationEnd = $false
-        }
-
-        # Some builds expose .Repetition (CIM instance) instead of RepetitionInterval/Duration properties.
-        $t.Repetition = $rep
-        return $t
-    }
-}
-
-function Write-Utf8NoBom([string]$Path, [string]$Text) {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($Path, $Text, $utf8NoBom)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
-function Ensure-Dir([string]$Path) {
+function Ensure-Dir {
+    param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
-        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 }
 
-function Stop-ExistingTaskIfAny([string]$Name) {
-    $existing = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
-    if ($existing) {
-        try { Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue } catch { }
+function Stop-ExistingTaskIfAny {
+    param([Parameter(Mandatory)][string]$TaskName)
+    try {
+        $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop
+        if ($info.State -eq "Running") {
+            Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
+            Start-Sleep -Seconds 2
+        }
+    } catch {
+        # Task doesn't exist
     }
 }
 
-function Remove-ExistingTaskIfAny([string]$Name) {
-    $existing = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
-    if ($existing) {
-        try { Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue } catch { }
-        try { Unregister-ScheduledTask -TaskName $Name -Confirm:$false } catch { }
+function Remove-ExistingTaskIfAny {
+    param([Parameter(Mandatory)][string]$TaskName)
+    try {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop | Out-Null
+    } catch {
+        # ignore
     }
 }
 
-function Resolve-AgentPayload {
-    param([string]$Root)
+function Resolve-AgentExe {
+    param([Parameter(Mandatory)][string]$PackagingDir)
 
-    $candidates = @(
-        @{ Kind = "onedir"; Dir = (Join-Path $Root "baseliner-agent"); Exe = (Join-Path $Root "baseliner-agent\baseliner-agent.exe") },
-        @{ Kind = "onefile"; Dir = $Root; Exe = (Join-Path $Root "baseliner-agent.exe") },
-        @{ Kind = "onedir"; Dir = (Join-Path $Root "dist\baseliner-agent"); Exe = (Join-Path $Root "dist\baseliner-agent\baseliner-agent.exe") },
-        @{ Kind = "onedir"; Dir = (Join-Path $Root "..\dist\baseliner-agent"); Exe = (Join-Path $Root "..\dist\baseliner-agent\baseliner-agent.exe") }
+    # Prefer current working dir (bundle extraction folder)
+    $cwdExe = Join-Path (Get-Location) "baseliner-agent.exe"
+    if (Test-Path -LiteralPath $cwdExe) { return (Resolve-Path -LiteralPath $cwdExe).Path }
+
+    # Next, alongside this script (if run from bundle folder)
+    $scriptExe = Join-Path $PackagingDir "baseliner-agent.exe"
+    if (Test-Path -LiteralPath $scriptExe) { return (Resolve-Path -LiteralPath $scriptExe).Path }
+
+    # Finally, dev tree dist locations
+    $distDir = Join-Path $PackagingDir "..\dist"
+    $exe1 = Join-Path $distDir "baseliner-agent\baseliner-agent.exe"
+    $exe2 = Join-Path $distDir "baseliner-agent.exe"
+    if (Test-Path -LiteralPath $exe1) { return (Resolve-Path -LiteralPath $exe1).Path }
+    if (Test-Path -LiteralPath $exe2) { return (Resolve-Path -LiteralPath $exe2).Path }
+
+    throw "Could not find baseliner-agent.exe. Expected it next to this installer (bundle), or in agent\dist."
+}
+
+function Escape-TomlString {
+    param([Parameter(Mandatory)][string]$Value)
+    # minimal TOML string escaping
+    return $Value.Replace('\', '\\').Replace('"', '\"')
+}
+
+function Toml-StringLiteral {
+    param([Parameter(Mandatory)][string]$Value)
+    return '"' + (Escape-TomlString $Value) + '"'
+}
+
+function Set-TomlKey {
+    <#
+      Upsert a TOML key either at top-level or within [agent] if that section exists.
+      - If key exists in target, replace its value.
+      - If key does not exist, insert it at end of target section.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][string]$ValueLiteral
     )
 
-    foreach ($c in $candidates) {
-        if (Test-Path -LiteralPath $c.Exe) {
-            return $c
+    $text = ""
+    if (Test-Path -LiteralPath $Path) {
+        $text = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $text) { $text = "" }
+    }
+
+    # Normalize newlines to \n for processing
+    $text = $text -replace "`r`n", "`n"
+    $lines = $text -split "`n", 0, "SimpleMatch"
+
+    $agentHeader = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*\[agent\]\s*$') { $agentHeader = $i; break }
+    }
+
+    $targetStart = 0
+    $targetEnd = $lines.Count
+
+    if ($agentHeader -ge 0) {
+        $targetStart = $agentHeader + 1
+        $targetEnd = $lines.Count
+        for ($j = $targetStart; $j -lt $lines.Count; $j++) {
+            if ($lines[$j] -match '^\s*\[.*\]\s*$') { $targetEnd = $j; break }
         }
     }
 
-    throw @"
-Could not find baseliner-agent payload.
-Expected one of:
-  - $Root\baseliner-agent\baseliner-agent.exe
-  - $Root\baseliner-agent.exe
-  - $Root\dist\baseliner-agent\baseliner-agent.exe
-  - $Root\..\dist\baseliner-agent\baseliner-agent.exe
+    $keyRegex = '^\s*' + [regex]::Escape($Key) + '\s*='
+    $replaced = $false
+    for ($i = $targetStart; $i -lt $targetEnd; $i++) {
+        if ($lines[$i] -match $keyRegex) {
+            $lines[$i] = "$Key = $ValueLiteral"
+            $replaced = $true
+            break
+        }
+    }
 
-If you're using the bundle output, make sure the folder "baseliner-agent" exists next to this script.
-"@
+    if (-not $replaced) {
+        # Insert before targetEnd
+        $newLines = New-Object System.Collections.Generic.List[string]
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($i -eq $targetEnd) {
+                $newLines.Add("$Key = $ValueLiteral")
+            }
+            $newLines.Add($lines[$i])
+        }
+        if ($targetEnd -ge $lines.Count) {
+            $newLines.Add("$Key = $ValueLiteral")
+        }
+        $lines = $newLines.ToArray()
+    }
+
+    $final = ($lines -join "`r`n").TrimEnd() + "`r`n"
+    Write-Utf8NoBom -Path $Path -Content $final
 }
 
 if (-not (Test-IsAdministrator)) {
-    throw "Install must be run as Administrator (required to register the Scheduled Task)."
+    throw "This installer must be run from an elevated (Administrator) PowerShell."
 }
 
-if ($IntervalSeconds -lt 30) {
-    throw "IntervalSeconds must be >= 30"
-}
+if ($IntervalSeconds -lt 30) { throw "IntervalSeconds must be >= 30 (got $IntervalSeconds)" }
+if ($HeartbeatIntervalSeconds -lt 0) { throw "HeartbeatIntervalSeconds must be >= 0 (got $HeartbeatIntervalSeconds)" }
+if ($JitterSeconds -lt 0) { throw "JitterSeconds must be >= 0 (got $JitterSeconds)" }
 
-$programFiles = [Environment]::GetFolderPath("ProgramFiles")
-$programData = [Environment]::GetFolderPath("CommonApplicationData")
+$PackagingDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-$InstallDir = Join-Path $programFiles "Baseliner"
-$DataDir = Join-Path $programData  "Baseliner"
-$BinDir = Join-Path $DataDir "bin"
-$LogDir = Join-Path $DataDir "logs"
+$programFiles = $env:ProgramFiles
+if (-not $programFiles) { $programFiles = "C:\Program Files" }
+$installDir = Join-Path $programFiles "Baseliner"
+$exePath = Join-Path $installDir "baseliner-agent.exe"
+$runnerPath = Join-Path $installDir "baseliner-agent-run.ps1"
 
-$ConfigPath = Join-Path $DataDir "agent.toml"
-$TokenPath = Join-Path $DataDir "device_token.dpapi"
+$programData = $env:ProgramData
+if (-not $programData) { $programData = "C:\ProgramData" }
+$stateDir = Join-Path $programData "Baseliner"
+$configPath = Join-Path $stateDir "agent.toml"
+$logsDir = Join-Path $stateDir "logs"
+$runLoopLog = Join-Path $logsDir "run-loop.log"
+$taskName = "Baseliner Agent"
 
-Write-Host "== Baseliner Agent install =="
-Write-Host "server : $ServerUrl"
-Write-Host "device : $DeviceKey"
-Write-Host "task   : $TaskName"
-Write-Host "runas  : $RunAs"
-Write-Host "interval_seconds: $IntervalSeconds"
-Write-Host "jitter_seconds  : $JitterSeconds"
+Write-Host "[INFO] InstallDir:   $installDir"
+Write-Host "[INFO] StateDir:     $stateDir"
+Write-Host "[INFO] Config:       $configPath"
+Write-Host "[INFO] Run-loop log: $runLoopLog"
+Write-Host "[INFO] TaskName:     $taskName"
 
-Stop-ExistingTaskIfAny -Name $TaskName
+Ensure-Dir -Path $installDir
+Ensure-Dir -Path $stateDir
+Ensure-Dir -Path $logsDir
 
-Ensure-Dir $InstallDir
-Ensure-Dir $DataDir
-Ensure-Dir $BinDir
-Ensure-Dir $LogDir
+# Copy agent exe
+$payloadExe = Resolve-AgentExe -PackagingDir $PackagingDir
+Copy-Item -LiteralPath $payloadExe -Destination $exePath -Force
+Write-Host "[OK] Copied agent: $exePath"
 
-# Locate payload
-$payload = Resolve-AgentPayload -Root $PSScriptRoot
-$SourceDir = $payload.Dir
-$SourceExe = $payload.Exe
-$PayloadKind = $payload.Kind
+# Ensure/Upsert agent.toml scheduling knobs
+if (-not (Test-Path -LiteralPath $configPath)) {
+    $base = @"
+# Baseliner agent configuration
+# Edit this file and restart the Scheduled Task to apply changes.
 
-Write-Host "== payload =="
-Write-Host "kind  : $PayloadKind"
-Write-Host "dir   : $SourceDir"
-Write-Host "exe   : $SourceExe"
-
-# Deploy binaries
-Write-Host "== deploying binaries =="
-
-try {
-    if (Test-Path -LiteralPath $InstallDir) {
-        Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-catch { }
-
-if ($PayloadKind -eq "onedir") {
-    # IMPORTANT: use -Path here (NOT -LiteralPath) because we intentionally use a wildcard.
-    Copy-Item -Recurse -Force -Path (Join-Path $SourceDir "*") -Destination $InstallDir
-}
-else {
-    Copy-Item -Force -LiteralPath $SourceExe -Destination (Join-Path $InstallDir "baseliner-agent.exe")
-}
-
-$ExePath = Join-Path $InstallDir "baseliner-agent.exe"
-if (-not (Test-Path -LiteralPath $ExePath)) {
-    throw "Deploy succeeded but exe missing: $ExePath"
-}
-
-# Write minimal config
-Write-Host "== writing config =="
-
-$cfg = @"
-server_url = "$ServerUrl"
+server_url = $(Toml-StringLiteral -Value $ServerUrl)
 poll_interval_seconds = $IntervalSeconds
+heartbeat_interval_seconds = $HeartbeatIntervalSeconds
+jitter_seconds = $JitterSeconds
 log_level = "info"
 "@
-
-Write-Utf8NoBom -Path $ConfigPath -Text $cfg
-
-# Enroll if needed
-if ($ReEnroll) {
-    Write-Host "== reenroll requested =="
-    if (Test-Path -LiteralPath $TokenPath) {
-        Remove-Item -Force -LiteralPath $TokenPath -ErrorAction SilentlyContinue
-    }
+    Write-Utf8NoBom -Path $configPath -Content $base
+    Write-Host "[OK] Created agent.toml"
+} else {
+    Write-Host "[INFO] Updating agent.toml (upsert keys)"
 }
 
-$isEnrolled = Test-Path -LiteralPath $TokenPath
-if (-not $isEnrolled) {
-    if (-not $EnrollToken.Trim()) {
-        throw "Device is not enrolled yet. Provide -EnrollToken (or remove -ReEnroll)."
-    }
+Set-TomlKey -Path $configPath -Key "server_url" -ValueLiteral (Toml-StringLiteral -Value $ServerUrl)
+Set-TomlKey -Path $configPath -Key "poll_interval_seconds" -ValueLiteral "$IntervalSeconds"
+Set-TomlKey -Path $configPath -Key "heartbeat_interval_seconds" -ValueLiteral "$HeartbeatIntervalSeconds"
+Set-TomlKey -Path $configPath -Key "jitter_seconds" -ValueLiteral "$JitterSeconds"
 
-    Write-Host "== enrolling device =="
-    & $ExePath --config $ConfigPath --state-dir $DataDir enroll --server $ServerUrl --enroll-token $EnrollToken --device-key $DeviceKey --tags $Tags
-    if ($LASTEXITCODE -ne 0) { throw "Enroll failed (exit $LASTEXITCODE)" }
-}
-else {
-    Write-Host "== already enrolled (token present) =="
-}
-
-# Wrapper called by the Scheduled Task (captures stdout/stderr)
-$WrapperPath = Join-Path $BinDir "baseliner-agent-run.ps1"
-$LogFile = Join-Path $LogDir "agent.log"
-
-$wrapper = @'
+# Runner script: runs run-loop and appends output to dedicated log (with simple rotation)
+$runner = @'
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Exe,
     [Parameter(Mandatory)][string]$Config,
     [Parameter(Mandatory)][string]$State,
-    [Parameter(Mandatory)][string]$Server,
-    [Parameter(Mandatory)][string]$LogDir,
-    [Parameter()][string]$Tags = "",
-    [Parameter()][string]$Log = "",
-    [Parameter()][int]$JitterSeconds = 0
+    [Parameter(Mandatory)][string]$LogPath
 )
 
-$ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
-function Now-Iso { (Get-Date).ToString("s") }
-function Ensure-Dir([string]$Path) { if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Force -Path $Path | Out-Null } }
+function Ensure-Dir([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+}
 
-function Safe-Append([string]$Path, [string[]]$Lines) {
+function Rotate-LogIfNeeded([string]$Path, [int64]$MaxBytes = 10485760, [int]$Keep = 5) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
     try {
-        $Lines | Out-File -LiteralPath $Path -Append -Encoding utf8 -ErrorAction Stop
-        return $true
-    } catch {
-        return $false
-    }
+        $len = (Get-Item -LiteralPath $Path).Length
+        if ($len -lt $MaxBytes) { return }
+
+        $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+        $dir = Split-Path -Parent $Path
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($Path)
+        $rot = Join-Path $dir ("$base-$ts.log")
+        Rename-Item -LiteralPath $Path -NewName $rot -Force
+
+        $pattern = "$base-*.log"
+        $files = Get-ChildItem -LiteralPath $dir -Filter $pattern -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+        if ($files.Count -gt $Keep) {
+            $files | Select-Object -Skip $Keep | ForEach-Object {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch { }
 }
 
-function LogLine([string]$s) {
-    if (-not $Log) { return }
-    Ensure-Dir (Split-Path -Parent $Log)
-    if (-not (Safe-Append -Path $Log -Lines @($s))) {
-        try {
-            $fallback = Join-Path $env:TEMP "baseliner-agent-runner-fallback.log"
-            $s | Out-File -LiteralPath $fallback -Append -Encoding utf8
-        } catch { }
-    }
-}
+Ensure-Dir (Split-Path -Parent $LogPath)
+Ensure-Dir $State
+Rotate-LogIfNeeded $LogPath
 
-# Per-run output lives under LogDir\runner (NOT State)
-Ensure-Dir $LogDir
-$OutDir = Join-Path $LogDir "runner"
-Ensure-Dir $OutDir
-
-$runStamp = (Get-Date).ToString("yyyyMMdd-HHmmss-fff")
-$runId    = ([guid]::NewGuid().ToString("N"))
-$outPath  = Join-Path $OutDir ("agent-{0}-{1}.out.log" -f $runStamp, $runId)
-
-# Header
-LogLine "==== baseliner task tick: $((Now-Iso)) ===="
-LogLine ("whoami={0}" -f ([Security.Principal.WindowsIdentity]::GetCurrent().Name))
-LogLine ("psver={0}" -f $PSVersionTable.PSVersion.ToString())
-LogLine "exe=$Exe"
-LogLine "config=$Config"
-LogLine "state=$State"
-LogLine "server=$Server"
-if ($Tags) { LogLine "tags=$Tags" }
-LogLine ("out={0}" -f $outPath)
-
-Safe-Append -Path $outPath -Lines @(
-    "==== baseliner agent run: $((Now-Iso)) ====",
-    ("whoami={0}" -f ([Security.Principal.WindowsIdentity]::GetCurrent().Name)),
-    ("psver={0}" -f $PSVersionTable.PSVersion.ToString()),
-    "exe=$Exe",
-    "config=$Config",
-    "state=$State",
-    "server=$Server",
-    ("tags={0}" -f $Tags)
-) | Out-Null
-
-if ($JitterSeconds -gt 0) {
-    $j = Get-Random -Minimum 0 -Maximum ($JitterSeconds + 1)
-    LogLine ("[TASK] jitter_sleep_s={0}" -f $j)
-    Safe-Append -Path $outPath -Lines @("[TASK] jitter_sleep_s=$j") | Out-Null
-    Start-Sleep -Seconds $j
-}
-
-try { chcp 65001 | Out-Null } catch { }
+try { chcp 65001 | Out-Null } catch {}
 $env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 
-# Validate
-if (-not (Test-Path -LiteralPath $Exe))    { LogLine "[ERROR] exe missing";    Safe-Append -Path $outPath -Lines @("[ERROR] exe missing") | Out-Null; exit 2 }
-if (-not (Test-Path -LiteralPath $Config)) { LogLine "[ERROR] config missing"; Safe-Append -Path $outPath -Lines @("[ERROR] config missing") | Out-Null; exit 2 }
-if (-not (Test-Path -LiteralPath $State))  { Ensure-Dir $State }
-
-try { Set-Location -LiteralPath $State } catch { }
-
-$args = @(
-    "--config", $Config,
-    "--state-dir", $State,
-    "run-once",
-    "--server", $Server
-)
-
-# IMPORTANT:
-# Do NOT pass --tags to run-once unless the agent CLI explicitly supports it.
-# (The agent currently errors with "unrecognized arguments: --tags ...")
-# Tags are still logged above for traceability.
-
-$tmpStdout = Join-Path $OutDir ("stdout-{0}-{1}.log" -f $runStamp, $runId)
-$tmpStderr = Join-Path $OutDir ("stderr-{0}-{1}.log" -f $runStamp, $runId)
+"$(Get-Date -Format o) [runner] starting: $Exe --config $Config --state-dir $State run-loop" | Out-File -FilePath $LogPath -Append -Encoding utf8
 
 try {
-    Safe-Append -Path $outPath -Lines @("[TASK] invoke: `"$Exe`" $($args -join ' ')") | Out-Null
-
-    $p = Start-Process -FilePath $Exe `
-        -ArgumentList $args `
-        -NoNewWindow `
-        -PassThru `
-        -Wait `
-        -RedirectStandardOutput $tmpStdout `
-        -RedirectStandardError  $tmpStderr
-
-    $code = $p.ExitCode
-
-    if (Test-Path -LiteralPath $tmpStdout) {
-        Safe-Append -Path $outPath -Lines @("---- stdout ----") | Out-Null
-        Get-Content -LiteralPath $tmpStdout -ErrorAction SilentlyContinue | Out-File -LiteralPath $outPath -Append -Encoding utf8
-    }
-    if (Test-Path -LiteralPath $tmpStderr) {
-        Safe-Append -Path $outPath -Lines @("---- stderr ----") | Out-Null
-        Get-Content -LiteralPath $tmpStderr -ErrorAction SilentlyContinue | Out-File -LiteralPath $outPath -Append -Encoding utf8
-    }
-
-    Safe-Append -Path $outPath -Lines @("[TASK] exit_code=$code ts=$((Now-Iso))") | Out-Null
-    LogLine ("[TASK] exit_code={0} ts={1}" -f $code, (Now-Iso))
-
-    Remove-Item -LiteralPath $tmpStdout -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $tmpStderr -Force -ErrorAction SilentlyContinue
-
-    exit $code
+    & $Exe --config $Config --state-dir $State run-loop 2>&1 | Tee-Object -FilePath $LogPath -Append | Out-Null
+    $code = $LASTEXITCODE
+} catch {
+    "$(Get-Date -Format o) [runner] exception: $($_.Exception.Message)" | Out-File -FilePath $LogPath -Append -Encoding utf8
+    $code = 1
 }
-catch {
-    $msg = $_.Exception.ToString()
-    LogLine "[ERROR] exception invoking agent:"
-    LogLine $msg
-    Safe-Append -Path $outPath -Lines @("[ERROR] exception invoking agent:", $msg, ("[TASK] exit_code=1 ts={0}" -f (Now-Iso))) | Out-Null
-    exit 1
-}
+
+"$(Get-Date -Format o) [runner] exit_code=$code" | Out-File -FilePath $LogPath -Append -Encoding utf8
+exit $code
 '@
 
-Write-Utf8NoBom -Path $WrapperPath -Text $wrapper
+Write-Utf8NoBom -Path $runnerPath -Content $runner
+Write-Host "[OK] Wrote runner: $runnerPath"
 
-# Register Scheduled Task
-Write-Host "== registering scheduled task =="
+# Enroll if needed
+$tokenPath = Join-Path $stateDir "device_token.dpapi"
+$hasToken = Test-Path -LiteralPath $tokenPath
 
-Remove-ExistingTaskIfAny -Name $TaskName
-
-$psExe = (Get-Command powershell.exe -ErrorAction Stop).Path
-$argList = @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-File", "`"$WrapperPath`"",
-    "-Exe", "`"$ExePath`"",
-    "-LogDir", "`"$LogDir`"",
-    "-Config", "`"$ConfigPath`"",
-    "-State", "`"$DataDir`"",
-    "-Server", "`"$ServerUrl`"",
-    "-Tags", "`"$Tags`"",
-    "-Log", "`"$LogFile`"",
-    "-JitterSeconds", "$JitterSeconds"
-) -join " "
-
-$action = New-ScheduledTaskAction -Execute $psExe -Argument $argList -WorkingDirectory $DataDir
-
-# Triggers:
-#  - AtStartup (one run when machine boots)
-#  - Repeating trigger every IntervalSeconds (start 1 minute from now)
-$startup = New-ScheduledTaskTrigger -AtStartup
-$repeat = New-RepeatingTrigger -StartAt (Get-Date).AddMinutes(1) -IntervalSeconds $IntervalSeconds
-
-if ($RunAs -eq "SYSTEM") {
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-}
-else {
-    $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    try {
-        $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Highest
+if (-not $SkipEnroll) {
+    if ($ReEnroll -or (-not $hasToken)) {
+        if (-not $EnrollToken) {
+            throw "EnrollToken is required for initial enrollment (or ReEnroll)."
+        }
+        Write-Host "[INFO] Enrolling device..."
+        & $exePath --config $configPath --state-dir $stateDir enroll --server $ServerUrl --enroll-token $EnrollToken --device-key $DeviceKey --tags $Tags
+        if ($LASTEXITCODE -ne 0) { throw "Enroll failed: exit_code=$LASTEXITCODE" }
+        Write-Host "[OK] Enrolled."
+    } else {
+        Write-Host "[INFO] Device token exists; skipping enroll (use -ReEnroll to force)."
     }
-    catch {
-        $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
-    }
+} else {
+    Write-Host "[INFO] SkipEnroll set; not enrolling."
 }
+
+# Scheduled Task: run-loop at startup (long-lived)
+Write-Host "[INFO] Installing Scheduled Task: $taskName"
+Stop-ExistingTaskIfAny -TaskName $taskName
+Remove-ExistingTaskIfAny -TaskName $taskName
+
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument (
+    "-NoProfile -ExecutionPolicy Bypass -File `"$runnerPath`" " +
+    "-Exe `"$exePath`" " +
+    "-Config `"$configPath`" " +
+    "-State `"$stateDir`" " +
+    "-LogPath `"$runLoopLog`""
+)
+
+$trigger = New-ScheduledTaskTrigger -AtStartup
 
 $settings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
-    -MultipleInstances IgnoreNew
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 0)
 
-$task = New-ScheduledTask -Action $action -Trigger @($startup, $repeat) -Settings $settings -Principal $principal
-Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
 
-Write-Host "[OK] Installed scheduled task: $TaskName"
-Write-Host "exe   : $ExePath"
-Write-Host "config: $ConfigPath"
-Write-Host "state : $DataDir"
-Write-Host "logs  : $LogFile"
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
+Write-Host "[OK] Installed Scheduled Task: $taskName"
 
-if (-not $NoStart) {
-    Write-Host "== starting task =="
-    Start-ScheduledTask -TaskName $TaskName
+if ($StartNow) {
+    Write-Host "[INFO] Starting Scheduled Task..."
+    Start-ScheduledTask -TaskName $taskName
+    Write-Host "[OK] Started."
 }
 
-Write-Host "[OK] done"
+Write-Host ""
+Write-Host "[OK] Install complete."
+Write-Host "    Config:       $configPath"
+Write-Host "    State:        $stateDir"
+Write-Host "    Run-loop log: $runLoopLog"

@@ -15,7 +15,13 @@ except Exception:  # pragma: no cover
 class AgentConfig:
     server_url: str | None = None
     enroll_token: str | None = None
+
+    # Scheduling knobs used by `baseliner-agent run-loop`.
+    # (CLI flags can override; env vars can override config file.)
     poll_interval_seconds: int = 900
+    heartbeat_interval_seconds: int = 0
+    jitter_seconds: int = 0
+
     log_level: str = "info"
     tags: dict[str, Any] = field(default_factory=dict)
     state_dir: str | None = None
@@ -86,6 +92,10 @@ def load_config(
         cfg.enroll_token = raw["enroll_token"]
     if isinstance(raw.get("poll_interval_seconds"), int):
         cfg.poll_interval_seconds = raw["poll_interval_seconds"]
+    if isinstance(raw.get("heartbeat_interval_seconds"), int):
+        cfg.heartbeat_interval_seconds = raw["heartbeat_interval_seconds"]
+    if isinstance(raw.get("jitter_seconds"), int):
+        cfg.jitter_seconds = raw["jitter_seconds"]
     if isinstance(raw.get("log_level"), str):
         cfg.log_level = raw["log_level"]
     if isinstance(raw.get("state_dir"), str):
@@ -107,6 +117,18 @@ def load_config(
     if env.get("BASELINER_POLL_INTERVAL_SECONDS"):
         try:
             cfg.poll_interval_seconds = int(env["BASELINER_POLL_INTERVAL_SECONDS"])
+        except Exception:
+            pass
+
+    if env.get("BASELINER_HEARTBEAT_INTERVAL_SECONDS"):
+        try:
+            cfg.heartbeat_interval_seconds = int(env["BASELINER_HEARTBEAT_INTERVAL_SECONDS"])
+        except Exception:
+            pass
+
+    if env.get("BASELINER_JITTER_SECONDS"):
+        try:
+            cfg.jitter_seconds = int(env["BASELINER_JITTER_SECONDS"])
         except Exception:
             pass
 

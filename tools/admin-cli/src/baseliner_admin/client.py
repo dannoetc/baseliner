@@ -104,6 +104,9 @@ class BaselinerAdminClient:
     def devices_debug(self, device_id: str) -> Any:
         return self.request("GET", f"/api/v1/admin/devices/{device_id}/debug")
 
+    def devices_tokens(self, device_id: str) -> Any:
+        return self.request("GET", f"/api/v1/admin/devices/{device_id}/tokens")
+
     def devices_delete(self, device_id: str, *, reason: str | None = None) -> Any:
         params: dict[str, Any] = {}
         if reason:
@@ -195,3 +198,49 @@ class BaselinerAdminClient:
         if target_id:
             params["target_id"] = target_id
         return self.request("GET", "/api/v1/admin/audit", params=params)
+
+
+    def enroll_token_create(
+        self,
+        *,
+        ttl_seconds: int | None = None,
+        expires_at: str | None = None,
+        note: str | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {}
+        if ttl_seconds is not None:
+            payload["ttl_seconds"] = int(ttl_seconds)
+        if expires_at:
+            payload["expires_at"] = expires_at
+        if note:
+            payload["note"] = note
+        return self.request("POST", "/api/v1/admin/enroll-tokens", json_body=payload)
+
+    def enroll_tokens_list(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        include_used: bool = False,
+        include_expired: bool = True,
+    ) -> Any:
+        return self.request(
+            "GET",
+            "/api/v1/admin/enroll-tokens",
+            params={
+                "limit": int(limit),
+                "offset": int(offset),
+                "include_used": str(bool(include_used)).lower(),
+                "include_expired": str(bool(include_expired)).lower(),
+            },
+        )
+
+    def enroll_token_revoke(self, token_id: str, *, reason: str | None = None) -> Any:
+        payload: dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        return self.request(
+            "POST",
+            f"/api/v1/admin/enroll-tokens/{token_id}/revoke",
+            json_body=payload,
+        )

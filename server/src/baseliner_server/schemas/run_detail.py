@@ -40,6 +40,9 @@ class RunDetailResponse(BaseModel):
     id: str
     device_id: str
 
+    # apply | heartbeat
+    kind: str | None = None
+
     # Correlation id propagated from X-Correlation-ID (agent/server tracing)
     correlation_id: str | None = None
 

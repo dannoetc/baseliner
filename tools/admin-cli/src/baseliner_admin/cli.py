@@ -12,6 +12,8 @@ from baseliner_admin.render import (
     render_assignments_list,
     render_assignments_plan,
     render_devices_list,
+    render_device_tokens_list,
+    render_enroll_tokens_list,
     render_policy_detail,
     render_policies_list,
     render_run_detail,
@@ -25,11 +27,13 @@ devices_app = typer.Typer(add_completion=False, help="Device administration")
 runs_app = typer.Typer(add_completion=False, help="Run inspection")
 policies_app = typer.Typer(add_completion=False, help="Policy administration")
 assignments_app = typer.Typer(add_completion=False, help="Policy assignment management")
+enroll_app = typer.Typer(add_completion=False, help="Enrollment token management")
 
 app.add_typer(devices_app, name="devices")
 app.add_typer(runs_app, name="runs")
 app.add_typer(policies_app, name="policies")
 app.add_typer(assignments_app, name="assignments")
+app.add_typer(enroll_app, name="enroll")
 
 
 @app.callback()
@@ -471,6 +475,63 @@ def tui(ctx: typer.Context) -> None:
     run_tui(client=_client(ctx), console=console)
 
 
+
+@enroll_app.command("create")
+def enroll_create(
+    ctx: typer.Context,
+    ttl_seconds: int | None = typer.Option(
+        None, "--ttl-seconds", help="If set, server computes expires_at = now + ttl_seconds"
+    ),
+    expires_at: str | None = typer.Option(
+        None,
+        "--expires-at",
+        help="Absolute expiry timestamp (ISO 8601). Overrides --ttl-seconds.",
+    ),
+    note: str | None = typer.Option(None, "--note"),
+) -> None:
+    c = _client(ctx)
+    payload = c.enroll_token_create(ttl_seconds=ttl_seconds, expires_at=expires_at, note=note)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
+@enroll_app.command("list")
+def enroll_list(
+    ctx: typer.Context,
+    limit: int = typer.Option(50, "--limit"),
+    offset: int = typer.Option(0, "--offset"),
+    include_used: bool = typer.Option(False, "--include-used"),
+    include_expired: bool = typer.Option(True, "--include-expired"),
+) -> None:
+    c = _client(ctx)
+    payload = c.enroll_tokens_list(
+        limit=limit,
+        offset=offset,
+        include_used=include_used,
+        include_expired=include_expired,
+    )
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    render_enroll_tokens_list(_console(), payload)
+
+
+@enroll_app.command("revoke")
+def enroll_revoke(
+    ctx: typer.Context,
+    token_id: str = typer.Argument(..., help="Enroll token UUID"),
+    reason: str | None = typer.Option(None, "--reason"),
+) -> None:
+    c = _client(ctx)
+    payload = c.enroll_token_revoke(token_id, reason=reason)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
 @devices_app.command("list")
 def devices_list(
     ctx: typer.Context,
@@ -595,6 +656,16 @@ def runs_show(
         return
     render_run_detail(_console(), payload, full=full, logs_limit=int(logs_limit))
 
+
+@devices_app.command("tokens")
+def devices_tokens(ctx: typer.Context, device_id: str) -> None:
+    """Show device auth token history (hash prefixes + timestamps)."""
+    c = _client(ctx)
+    payload = c.devices_tokens(device_id)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    render_device_tokens_list(_console(), payload, title=f"Device tokens: {device_id}")
 
 @policies_app.command("list")
 def policies_list(

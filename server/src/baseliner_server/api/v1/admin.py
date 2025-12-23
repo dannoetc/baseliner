@@ -17,6 +17,7 @@ from baseliner_server.db.models import (
     AssignmentMode,
     AuditLog,
     Device,
+    DeviceAuthToken,
     DeviceStatus,
     EnrollToken,
     LogEvent,
@@ -31,12 +32,18 @@ from baseliner_server.schemas.admin import (
     ClearAssignmentsResponse,
     CreateEnrollTokenRequest,
     CreateEnrollTokenResponse,
+    RevokeEnrollTokenResponse,
+    RevokeEnrollTokenRequest,
+    EnrollTokensListResponse,
+    EnrollTokenSummary,
     DeleteDeviceResponse,
     DeviceAssignmentsResponse,
     DeviceDebugResponse,
     PolicyAssignmentDebugOut,
     PolicyAssignmentOut,
     RestoreDeviceResponse,
+    DeviceAuthTokenSummary,
+    DeviceTokensListResponse,
     RevokeDeviceTokenResponse,
     RunDebugSummary,
 )
@@ -68,6 +75,21 @@ def utcnow() -> datetime:
     # Return a timezone-naive UTC datetime.
     # (SQLite + tests are using naive datetimes, so keep it consistent.)
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _compute_enroll_token_expires_at(payload: CreateEnrollTokenRequest) -> datetime | None:
+    # expires_at wins if explicitly provided.
+    if payload.expires_at is not None:
+        return payload.expires_at
+    if payload.ttl_seconds is None:
+        return None
+    try:
+        ttl = int(payload.ttl_seconds)
+    except Exception:
+        return None
+    if ttl <= 0:
+        return None
+    return utcnow() + timedelta(seconds=ttl)
 
 
 def _status(v: Any) -> Optional[str]:
@@ -115,7 +137,7 @@ def create_enroll_token(
     tok = EnrollToken(
         token_hash=hash_token(raw),
         created_at=utcnow(),
-        expires_at=payload.expires_at,
+        expires_at=_compute_enroll_token_expires_at(payload),
         used_at=None,
         note=payload.note,
     )
@@ -130,13 +152,116 @@ def create_enroll_token(
         target_type="enroll_token",
         target_id=str(tok.id),
         data={
-            "expires_at": payload.expires_at.isoformat() if payload.expires_at else None,
+            "expires_at": tok.expires_at.isoformat() if tok.expires_at else None,
+            "ttl_seconds": payload.ttl_seconds,
             "note": payload.note,
         },
     )
 
     db.commit()
-    return CreateEnrollTokenResponse(enroll_token=raw, expires_at=payload.expires_at)
+    return CreateEnrollTokenResponse(enroll_token=raw, expires_at=tok.expires_at)
+
+@router.get(
+    "/admin/enroll-tokens",
+    response_model=EnrollTokensListResponse,
+    dependencies=[Depends(require_admin)],
+)
+def list_enroll_tokens(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    include_used: bool = Query(False),
+    include_expired: bool = Query(True),
+    db: Session = Depends(get_db),
+) -> EnrollTokensListResponse:
+    """List enroll tokens (metadata only; never returns raw token)."""
+
+    clauses = []
+    if not include_used:
+        clauses.append(EnrollToken.used_at.is_(None))
+    if not include_expired:
+        now = utcnow()
+        clauses.append(or_(EnrollToken.expires_at.is_(None), EnrollToken.expires_at > now))
+
+    where = and_(*clauses) if clauses else None
+
+    total_stmt = select(func.count()).select_from(EnrollToken)
+    if where is not None:
+        total_stmt = total_stmt.where(where)
+    total = int(db.scalar(total_stmt) or 0)
+
+    stmt = select(EnrollToken).order_by(desc(EnrollToken.created_at)).limit(limit).offset(offset)
+    if where is not None:
+        stmt = stmt.where(where)
+
+    rows = db.scalars(stmt).all()
+    now = utcnow()
+    items: list[EnrollTokenSummary] = []
+    for t in rows:
+        is_used = t.used_at is not None
+        is_expired = (t.expires_at is not None and t.expires_at <= now)
+        items.append(
+            EnrollTokenSummary(
+                id=str(t.id),
+                created_at=t.created_at,
+                expires_at=t.expires_at,
+                used_at=t.used_at,
+                used_by_device_id=str(t.used_by_device_id) if t.used_by_device_id else None,
+                note=t.note,
+                is_used=is_used,
+                is_expired=is_expired,
+            )
+        )
+
+    return EnrollTokensListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post(
+    "/admin/enroll-tokens/{token_id}/revoke",
+    response_model=RevokeEnrollTokenResponse,
+)
+def revoke_enroll_token(
+    request: Request,
+    payload: RevokeEnrollTokenRequest,
+    token_id: uuid.UUID = Path(..., description="Enroll token UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db: Session = Depends(get_db),
+) -> RevokeEnrollTokenResponse:
+    """Revoke an enroll token (implemented by expiring it immediately)."""
+
+    tok = db.scalar(select(EnrollToken).where(EnrollToken.id == token_id))
+    if not tok:
+        raise HTTPException(status_code=404, detail="Enroll token not found")
+
+    now = utcnow()
+    tok.expires_at = now
+
+    reason = (payload.reason or "").strip()
+    if reason:
+        tok.note = ((tok.note or "").rstrip() + f"\nrevoked: {reason}").strip()
+    else:
+        tok.note = ((tok.note or "").rstrip() + "\nrevoked").strip()
+
+    emit_admin_audit(
+        db,
+        request,
+        actor_id=admin_actor,
+        action="enroll_token.revoke",
+        target_type="enroll_token",
+        target_id=str(tok.id),
+        data={"reason": reason or None},
+    )
+
+    db.add(tok)
+    db.commit()
+
+    return RevokeEnrollTokenResponse(
+        token_id=str(tok.id),
+        revoked_at=now,
+        expires_at=tok.expires_at,
+        note=tok.note,
+    )
+
+
 
 
 @router.post(
@@ -332,19 +457,61 @@ def delete_device(
         # old (already revoked) token to this device for a clear 403.
         if reason and not device.deleted_reason:
             device.deleted_reason = reason
+        device.status = DeviceStatus.deleted
+        if device.deleted_at is None:
+            device.deleted_at = utcnow()
     else:
         now = utcnow()
 
-        # Revoke token: keep the previous hash so we can return a clear 403 for old tokens.
-        device.revoked_auth_token_hash = device.auth_token_hash
-        device.token_revoked_at = now
+        # Revoke the current token and rotate to an unknown value (not returned).
+        old_hash = device.auth_token_hash
+        rotated_token = secrets.token_urlsafe(32)
+        rotated_hash = hash_token(rotated_token)
 
-        # Rotate the active token hash to an unknown value (not returned).
-        device.auth_token_hash = hash_token(secrets.token_urlsafe(32))
+        device.revoked_auth_token_hash = old_hash
+        device.token_revoked_at = now
+        device.auth_token_hash = rotated_hash
+
+        # Token history: record the rotated hash (even though the device is deactivated) and revoke
+        # any previous active tokens so we have deterministic mappings for audit/debug.
+        rotated_tok = DeviceAuthToken(device_id=device.id, token_hash=rotated_hash, created_at=now)
+        db.add(rotated_tok)
+        db.flush()
+
+        active = (
+            db.query(DeviceAuthToken)
+            .filter(
+                DeviceAuthToken.device_id == device.id,
+                DeviceAuthToken.revoked_at.is_(None),
+                DeviceAuthToken.id != rotated_tok.id,
+            )
+            .all()
+        )
+        if active:
+            for t in active:
+                t.revoked_at = now
+                t.replaced_by_id = rotated_tok.id
+                db.add(t)
+        else:
+            # Compatibility: if token history is empty, capture + revoke the legacy active hash.
+            if old_hash:
+                legacy = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash))
+                if legacy is None:
+                    legacy = DeviceAuthToken(
+                        device_id=device.id,
+                        token_hash=old_hash,
+                        created_at=getattr(device, "enrolled_at", None) or now,
+                    )
+                    db.add(legacy)
+                    db.flush()
+                legacy.revoked_at = now
+                legacy.replaced_by_id = rotated_tok.id
+                db.add(legacy)
 
         device.status = DeviceStatus.deleted
         device.deleted_at = now
-        device.deleted_reason = reason
+        if reason:
+            device.deleted_reason = reason
 
     emit_admin_audit(
         db,
@@ -371,8 +538,6 @@ def delete_device(
         token_revoked_at=device.token_revoked_at,
         assignments_removed=int(removed or 0),
     )
-
-
 @router.post(
     "/admin/devices/{device_id}/restore",
     response_model=RestoreDeviceResponse,
@@ -394,7 +559,46 @@ def restore_device(
 
     now = utcnow()
     new_token = secrets.token_urlsafe(32)
-    device.auth_token_hash = hash_token(new_token)
+    new_hash = hash_token(new_token)
+
+    # Token history: record the new token and revoke any prior active tokens (from the deleted state).
+    new_tok = DeviceAuthToken(device_id=device.id, token_hash=new_hash, created_at=now)
+    db.add(new_tok)
+    db.flush()
+
+    active = (
+        db.query(DeviceAuthToken)
+        .filter(
+            DeviceAuthToken.device_id == device.id,
+            DeviceAuthToken.revoked_at.is_(None),
+            DeviceAuthToken.id != new_tok.id,
+        )
+        .all()
+    )
+
+    if active:
+        for t in active:
+            t.revoked_at = now
+            t.replaced_by_id = new_tok.id
+            db.add(t)
+    else:
+        # Compatibility: capture the legacy active hash if token history is empty.
+        old_hash = device.auth_token_hash
+        if old_hash:
+            legacy = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash))
+            if legacy is None:
+                legacy = DeviceAuthToken(
+                    device_id=device.id,
+                    token_hash=old_hash,
+                    created_at=getattr(device, "enrolled_at", None) or now,
+                )
+                db.add(legacy)
+                db.flush()
+            legacy.revoked_at = now
+            legacy.replaced_by_id = new_tok.id
+            db.add(legacy)
+
+    device.auth_token_hash = new_hash
     device.status = DeviceStatus.active
     device.deleted_at = None
     device.deleted_reason = None
@@ -418,8 +622,6 @@ def restore_device(
         restored_at=now,
         device_token=new_token,
     )
-
-
 @router.post(
     "/admin/devices/{device_id}/revoke-token",
     response_model=RevokeDeviceTokenResponse,
@@ -441,10 +643,48 @@ def revoke_device_token(
 
     now = utcnow()
     new_token = secrets.token_urlsafe(32)
+    new_hash = hash_token(new_token)
+    old_hash = device.auth_token_hash
 
-    device.revoked_auth_token_hash = device.auth_token_hash
+    # Record the new token + revoke any previous active tokens.
+    new_tok = DeviceAuthToken(device_id=device.id, token_hash=new_hash, created_at=now)
+    db.add(new_tok)
+    db.flush()
+
+    active = (
+        db.query(DeviceAuthToken)
+        .filter(
+            DeviceAuthToken.device_id == device.id,
+            DeviceAuthToken.revoked_at.is_(None),
+            DeviceAuthToken.id != new_tok.id,
+        )
+        .all()
+    )
+    if active:
+        for t in active:
+            t.revoked_at = now
+            t.replaced_by_id = new_tok.id
+            db.add(t)
+    else:
+        # Compatibility: if token history is empty, capture + revoke the legacy active hash.
+        if old_hash:
+            legacy = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash))
+            if legacy is None:
+                legacy = DeviceAuthToken(
+                    device_id=device.id,
+                    token_hash=old_hash,
+                    created_at=getattr(device, "enrolled_at", None) or now,
+                )
+                db.add(legacy)
+                db.flush()
+            legacy.revoked_at = now
+            legacy.replaced_by_id = new_tok.id
+            db.add(legacy)
+
+    # Legacy fields retained for clear 403 messaging and compatibility.
+    device.revoked_auth_token_hash = old_hash
     device.token_revoked_at = now
-    device.auth_token_hash = hash_token(new_token)
+    device.auth_token_hash = new_hash
 
     emit_admin_audit(
         db,
@@ -465,7 +705,42 @@ def revoke_device_token(
         token_revoked_at=now,
         device_token=new_token,
     )
+@router.get(
+    "/admin/devices/{device_id}/tokens",
+    response_model=DeviceTokensListResponse,
+    dependencies=[Depends(require_admin)],
+)
+def list_device_tokens(
+    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    db: Session = Depends(get_db),
+) -> DeviceTokensListResponse:
+    """List device auth token history (hash prefixes + timestamps only)."""
 
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    toks = db.scalars(
+        select(DeviceAuthToken)
+        .where(DeviceAuthToken.device_id == device.id)
+        .order_by(DeviceAuthToken.created_at.desc())
+    ).all()
+
+    items: list[DeviceAuthTokenSummary] = []
+    for t in toks:
+        items.append(
+            DeviceAuthTokenSummary(
+                id=str(t.id),
+                token_hash_prefix=(t.token_hash or "")[:12] if getattr(t, "token_hash", None) else None,
+                created_at=t.created_at,
+                revoked_at=t.revoked_at,
+                last_used_at=t.last_used_at,
+                replaced_by_id=str(t.replaced_by_id) if t.replaced_by_id else None,
+                is_active=(t.revoked_at is None),
+            )
+        )
+
+    return DeviceTokensListResponse(device_id=str(device.id), items=items)
 
 @router.get(
     "/admin/devices/{device_id}/debug",
@@ -978,7 +1253,7 @@ def list_devices(
         1800,
         ge=60,
         le=60 * 60 * 24,
-        description="Mark device as 'stale' if latest run is older than this many seconds.",
+        description="Mark device as 'stale' if the latest apply run is older than this many seconds.",
     ),
     offline_after_seconds: int = Query(
         3600,
@@ -993,10 +1268,14 @@ def list_devices(
 ) -> DevicesListResponse:
     from baseliner_server.schemas.admin_list import DeviceHealth, RunSummaryLite
 
-    runs_ranked = (
+    # We track both:
+    #   - last_any_run: latest run of any kind (for general visibility)
+    #   - last_apply_run: latest apply run (for health computation)
+    runs_any_ranked = (
         select(
             Run.id.label("run_id"),
             Run.device_id.label("device_id"),
+            Run.kind.label("kind"),
             Run.started_at.label("started_at"),
             Run.ended_at.label("ended_at"),
             Run.status.label("status"),
@@ -1010,13 +1289,34 @@ def list_devices(
         )
     ).subquery()
 
-    stmt = select(Device, runs_ranked)
+    runs_apply_ranked = (
+        select(
+            Run.id.label("apply_run_id"),
+            Run.device_id.label("apply_device_id"),
+            Run.kind.label("apply_kind"),
+            Run.started_at.label("apply_started_at"),
+            Run.ended_at.label("apply_ended_at"),
+            Run.status.label("apply_status"),
+            func.row_number()
+            .over(partition_by=Run.device_id, order_by=(Run.started_at.desc(), Run.id.desc()))
+            .label("apply_rn"),
+        )
+        .where(Run.kind == RunKind.apply)
+    ).subquery()
+
+    stmt = select(Device, runs_any_ranked, runs_apply_ranked)
     if not include_deleted:
         stmt = stmt.where(Device.status == DeviceStatus.active)
 
     stmt = (
         stmt.outerjoin(
-            runs_ranked, (runs_ranked.c.device_id == Device.id) & (runs_ranked.c.rn == 1)
+            runs_any_ranked,
+            (runs_any_ranked.c.device_id == Device.id) & (runs_any_ranked.c.rn == 1),
+        )
+        .outerjoin(
+            runs_apply_ranked,
+            (runs_apply_ranked.c.apply_device_id == Device.id)
+            & (runs_apply_ranked.c.apply_rn == 1),
         )
         .order_by(desc(Device.last_seen_at), desc(Device.enrolled_at))
         .offset(offset)
@@ -1046,23 +1346,20 @@ def list_devices(
         d: Device = row[0]
         m = row._mapping  # labeled columns from runs_ranked live here
 
-        run_id = m.get("run_id")
-        last_run_at: datetime | None = None
-        last_run_status: str | None = None
+        any_run_id = m.get("run_id")
         last_run_obj: RunSummaryLite | None = None
 
-        if run_id is not None:
-            last_run_status = _status(m.get("status"))
+        if any_run_id is not None:
             started_at = m.get("started_at")
             ended_at = m.get("ended_at")
-            last_run_at = ended_at or started_at
 
             last_run_obj = RunSummaryLite(
-                id=str(run_id),
+                id=str(any_run_id),
                 correlation_id=m.get("correlation_id"),
+                kind=_status(m.get("kind")),
                 started_at=started_at,
                 ended_at=ended_at,
-                status=last_run_status,
+                status=_status(m.get("status")),
                 agent_version=m.get("agent_version"),
                 effective_policy_hash=m.get("effective_policy_hash"),
                 summary=(m.get("summary") or {}),
@@ -1072,23 +1369,32 @@ def list_devices(
 
         # Provide basic health insight even when include_health=False so clients
         # consistently receive last_run + health metadata.
-        if include_health or last_run_at is not None or d.last_seen_at is not None:
+        # Health is computed from the latest *apply* run (not heartbeat), so
+        # frequent heartbeats do not mask stale policy application.
+        apply_started_at: datetime | None = m.get("apply_started_at")
+        apply_ended_at: datetime | None = m.get("apply_ended_at")
+        apply_run_at: datetime | None = (apply_ended_at or apply_started_at)
+        apply_run_status: str | None = _status(m.get("apply_status"))
+
+        if include_health or apply_run_at is not None or d.last_seen_at is not None:
             seen_age_s = _age_seconds(d.last_seen_at)
-            run_age_s = _age_seconds(last_run_at)
+            run_age_s = _age_seconds(apply_run_at)
 
             offline = (seen_age_s is None) or (seen_age_s > int(offline_after_seconds))
             stale = (run_age_s is None) or (run_age_s > int(stale_after_seconds))
-            last_run_failed = bool(last_run_status and last_run_status.lower() != "succeeded")
+            last_run_failed = bool(
+                apply_run_status and apply_run_status.lower() != "succeeded"
+            )
 
             if offline:
                 health_status = "offline"
                 reason = "device has not checked in recently"
             elif last_run_failed:
                 health_status = "warn"
-                reason = "latest run failed"
+                reason = "latest apply run failed"
             elif stale:
                 health_status = "warn"
-                reason = "stale"
+                reason = "stale apply"
             else:
                 health_status = "ok"
                 reason = None
@@ -1097,8 +1403,9 @@ def list_devices(
                 status=health_status,
                 now=now,
                 last_seen_at=d.last_seen_at,
-                last_run_at=last_run_at,
-                last_run_status=last_run_status,
+                last_run_at=apply_run_at,
+                last_run_status=apply_run_status,
+                last_run_kind="apply" if apply_run_at is not None else None,
                 seen_age_seconds=seen_age_s,
                 run_age_seconds=run_age_s,
                 stale=bool(stale),
@@ -1151,6 +1458,7 @@ def list_runs(
             RunSummary(
                 id=str(r.id),
                 device_id=str(r.device_id),
+                kind=_status(r.kind),
                 correlation_id=r.correlation_id,
                 started_at=r.started_at,
                 ended_at=r.ended_at,
@@ -1194,6 +1502,7 @@ def get_run_detail(
     return RunDetailResponse(
         id=str(run.id),
         device_id=str(run.device_id),
+        kind=_status(run.kind),
         correlation_id=run.correlation_id,
         started_at=run.started_at,
         ended_at=run.ended_at,

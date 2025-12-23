@@ -202,7 +202,8 @@ def test_health_warn_failed_run(client, db):
 
     assert d["health"]["status"] == "warn"
     assert d["health"]["offline"] is False
-    assert (d["health"].get("reason") or "").lower().startswith("latest run failed")
+    assert "apply" in (d["health"].get("reason") or "").lower()
+    assert "failed" in (d["health"].get("reason") or "").lower()
 
 
 def test_last_run_and_health_present_without_flag(client, db):

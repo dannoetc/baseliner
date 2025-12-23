@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent import enroll_device, heartbeat_once, run_once
-from .agent_health import write_health
+from .agent_health import build_health, write_health
 from .config import default_config_path, load_config, merge_tags
 from .state import AgentState, default_state_dir
 from .support_bundle import create_support_bundle, default_bundle_path
@@ -114,13 +114,13 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument(
         "--heartbeat-interval",
         type=int,
-        default=0,
+        default=cfg.heartbeat_interval_seconds,
         help="If set > 0, post heartbeat runs on this interval in seconds (default: %(default)s)",
     )
     p_loop.add_argument(
         "--jitter",
         type=int,
-        default=0,
+        default=cfg.jitter_seconds,
         help="Random extra sleep added each cycle in seconds (default: %(default)s)",
     )
     p_loop.add_argument(
@@ -255,6 +255,14 @@ def _run_loop(
         f"heartbeat_interval={heartbeat_interval}s jitter={jitter}s server={server}"
     )
 
+    # One-time startup jitter (helps avoid thundering herd at boot)
+    if jitter > 0:
+        startup = random.randint(0, jitter)
+        if startup > 0:
+            print(f"[baseliner-agent] run-loop: startup_jitter_sleep={startup}s")
+            time.sleep(startup)
+
+
     next_apply = time.time()
     next_hb: float | None = time.time() if heartbeat_interval > 0 else None
 
@@ -316,6 +324,8 @@ def _redact_config_for_print(cfg: Any) -> dict[str, Any]:
         "server_url": cfg.server_url,
         "enroll_token": "***redacted***" if getattr(cfg, "enroll_token", None) else None,
         "poll_interval_seconds": cfg.poll_interval_seconds,
+        "heartbeat_interval_seconds": getattr(cfg, "heartbeat_interval_seconds", 0),
+        "jitter_seconds": getattr(cfg, "jitter_seconds", 0),
         "log_level": cfg.log_level,
         "tags": cfg.tags or {},
         "state_dir": cfg.state_dir,

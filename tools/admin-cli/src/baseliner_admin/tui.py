@@ -13,6 +13,7 @@ from baseliner_admin.render import (
     render_assignments_list,
     render_assignments_plan,
     render_devices_list,
+    render_enroll_tokens_list,
     render_policy_detail,
     render_policies_list,
     render_run_detail,
@@ -52,7 +53,7 @@ def run_tui(
         console.print("[bold]Baseliner Admin[/bold]")
         choice = Prompt.ask(
             "Choose",
-            choices=["devices", "policies", "runs", "audit", "exit"],
+            choices=["devices", "policies", "runs", "enroll", "audit", "exit"],
             default="devices",
         )
 
@@ -63,6 +64,8 @@ def run_tui(
                 _policies_menu(client=client, console=console)
             elif choice == "runs":
                 _runs_menu(client=client, console=console)
+            elif choice == "enroll":
+                _enroll_tokens_menu(client=client, console=console)
             elif choice == "audit":
                 _audit_menu(client=client, console=console)
             elif choice == "exit":
@@ -110,6 +113,48 @@ def _pick_from_table(
             return items[n - 1]
         console.print("Invalid selection")
 
+
+
+
+def _enroll_tokens_menu(*, client: BaselinerAdminClient, console: Console) -> None:
+    while True:
+        console.clear()
+        payload = client.enroll_tokens_list(limit=200, offset=0, include_used=True, include_expired=True)
+        render_enroll_tokens_list(console, payload, title="Enroll tokens (newest first)")
+
+        action = Prompt.ask(
+            "Action",
+            choices=["create", "revoke", "refresh", "back"],
+            default="create",
+        )
+        if action == "back":
+            return
+        if action == "refresh":
+            continue
+
+        try:
+            if action == "create":
+                ttl = IntPrompt.ask("TTL seconds (0 for none)", default=3600)
+                note = Prompt.ask("Note (optional)", default="")
+                payload = client.enroll_token_create(
+                    ttl_seconds=int(ttl) if int(ttl) > 0 else None,
+                    note=note or None,
+                )
+                console.print_json(data=payload)
+                _pause(console)
+
+            elif action == "revoke":
+                token_id = Prompt.ask("Token ID (uuid)")
+                reason = Prompt.ask("Reason (optional)", default="")
+                if not Confirm.ask(f"Revoke enroll token {token_id}?", default=False):
+                    continue
+                payload = client.enroll_token_revoke(token_id, reason=reason or None)
+                console.print_json(data=payload)
+                _pause(console)
+
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            _pause(console)
 
 def _devices_menu(*, client: BaselinerAdminClient, console: Console) -> None:
     include_deleted = Confirm.ask("Include deleted devices?", default=False)
@@ -166,7 +211,7 @@ def _devices_menu(*, client: BaselinerAdminClient, console: Console) -> None:
 
         action = Prompt.ask(
             "Action",
-            choices=["debug", "assignments", "delete", "restore", "revoke-token", "back"],
+            choices=["debug", "tokens", "assignments", "delete", "restore", "revoke-token", "back"],
             default="debug",
         )
 
@@ -179,6 +224,14 @@ def _devices_menu(*, client: BaselinerAdminClient, console: Console) -> None:
                 console.clear()
                 console.print_json(data=payload)
                 _pause(console)
+
+
+elif action == "tokens":
+    payload = client.devices_tokens(device_id)
+    render_device_tokens_list(
+        console, payload, title=f"Device tokens: {device.get('device_key')} ({device_id})"
+    )
+    _pause(console)
 
             elif action == "assignments":
                 _device_assignments_menu(

@@ -3,12 +3,12 @@ import hmac
 from datetime import datetime, timezone
 from typing import Generator, Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from baseliner_server.core.config import settings
-from baseliner_server.db.models import Device, DeviceStatus
+from baseliner_server.db.models import Device, DeviceAuthToken, DeviceStatus
 from baseliner_server.db.session import SessionLocal
 
 
@@ -69,34 +69,73 @@ def require_admin_actor(x_admin_key: Optional[str] = Header(default=None)) -> st
 
 
 def get_current_device(
+    request: Request,
     db: Session = Depends(get_db),
     token: str = Depends(get_bearer_token),
 ) -> Device:
+    """Resolve the authenticated device by bearer token.
+
+    We prefer the device_auth_tokens table for deterministic token lifecycle handling
+    (history + revoked/active + last_used). As a compatibility bridge (tests / pre-migration
+    DBs), we can fall back to the legacy devices.auth_token_hash / revoked_auth_token_hash
+    fields if no token-row exists yet.
+    """
+
     token_h = hash_token(token)
 
-    # Allow lookups by either the current active token hash or the most recently revoked token hash.
-    # This lets us return a clear 403 (revoked/deactivated) instead of a generic 401.
-    device = db.scalar(
-        select(Device).where(
-            or_(
-                Device.auth_token_hash == token_h,
-                Device.revoked_auth_token_hash == token_h,
+    tok = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == token_h))
+    device: Device | None = tok.device if tok is not None else None
+
+    if device is None:
+        # Legacy fallback: map to device by current/most-recently revoked hash so we can return a
+        # clear 403 instead of a generic 401. If we find a match and no token row exists, we may
+        # lazily create a token-history row (active path only).
+        device = db.scalar(
+            select(Device).where(
+                or_(
+                    Device.auth_token_hash == token_h,
+                    Device.revoked_auth_token_hash == token_h,
+                )
             )
         )
-    )
-    if not device:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device token")
+        if not device:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device token")
+
+        if device.revoked_auth_token_hash == token_h:
+            # Revoked token presented (deny, but don't mutate device state).
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token revoked")
+
+        # Active legacy token: create a history row so subsequent lookups are consistent.
+        tok = DeviceAuthToken(
+            device_id=device.id,
+            token_hash=token_h,
+            created_at=getattr(device, "enrolled_at", None) or utcnow(),
+        )
+        db.add(tok)
+        db.flush()
 
     # Lifecycle gates
     if getattr(device, "status", None) != DeviceStatus.active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device deactivated")
 
-    # Token revocation gate. If the presented token matches the revoked hash, we always block.
-    # NOTE: token_revoked_at is informational and should not block *new* tokens minted after a revoke.
-    if device.revoked_auth_token_hash == token_h:
+    if tok is not None and tok.revoked_at is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token revoked")
 
-    device.last_seen_at = utcnow()
+    now = utcnow()
+    device.last_seen_at = now
+
+    # Token usage signal: update only for device report posts (to keep this "meaningful").
+    try:
+        if (
+            request.method.upper() == "POST"
+            and request.url.path.endswith("/api/v1/device/reports")
+            and tok is not None
+        ):
+            tok.last_used_at = now
+            db.add(tok)
+    except Exception:
+        pass
+
     db.add(device)
     db.commit()
 

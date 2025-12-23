@@ -16,6 +16,9 @@ class RunSummaryLite(ORMModel):
     id: str
     correlation_id: str | None = None
 
+    # apply | heartbeat
+    kind: str | None = None
+
     started_at: datetime | None = None
     ended_at: datetime | None = None
     status: str | None = None
@@ -30,6 +33,9 @@ class DeviceHealth(ORMModel):
     last_seen_at: datetime | None = None
     last_run_at: datetime | None = None
     last_run_status: str | None = None
+
+    # apply | heartbeat (health uses the latest *apply* run, not heartbeat)
+    last_run_kind: str | None = None
 
     seen_age_seconds: int | None = None
     run_age_seconds: int | None = None
@@ -78,6 +84,9 @@ class DevicesListResponse(ORMModel):
 class RunSummary(ORMModel):
     id: str
     device_id: str | None = None
+
+    # apply | heartbeat
+    kind: str | None = None
 
     correlation_id: str | None = None
 

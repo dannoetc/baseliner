@@ -58,7 +58,7 @@ $agentRoot = Split-Path -Parent $here
 Push-Location $agentRoot
 try {
     if ($Clean) {
-        foreach ($p in @("build", "dist", "out")) {
+        foreach ($p in @("build", "dist", "out", ".venv-build")) {
             if (Test-Path -LiteralPath $p) { Remove-Item -Recurse -Force -LiteralPath $p }
         }
     }
@@ -70,6 +70,27 @@ try {
     $venvDir = Join-Path $agentRoot ".venv-build"
     $venvPy = Join-Path $venvDir "Scripts\python.exe"
 
+    function Invoke-Checked {
+        param(
+            [Parameter(Mandatory)][string]$Exe,
+            [Parameter(Mandatory)][string[]]$Args,
+            [Parameter(Mandatory)][string]$What
+        )
+
+        & $Exe @Args
+        if ($LASTEXITCODE -ne 0) {
+            throw "$What failed (exit $LASTEXITCODE)"
+        }
+    }
+
+    function Test-PipHealthy {
+        param([Parameter(Mandatory)][string]$VenvPy)
+
+        # NOTE: broken pip can emit a stack trace; suppress output.
+        & $VenvPy -m pip --version *> $null
+        return ($LASTEXITCODE -eq 0)
+    }
+
     function Ensure-BuildVenv {
         param([string]$Py, [string]$VenvDir, [string]$VenvPy)
 
@@ -77,10 +98,7 @@ try {
 
         if (-not $needsCreate) {
             # If pip is broken/corrupted, recreate the venv.
-            try {
-                & $VenvPy -m pip --version | Out-Null
-            }
-            catch {
+            if (-not (Test-PipHealthy -VenvPy $VenvPy)) {
                 Write-Host "[WARN] Build venv pip appears broken; recreating: $VenvDir"
                 $needsCreate = $true
             }
@@ -97,23 +115,21 @@ try {
             if ($code -ne 0) { throw "venv creation failed (exit $code)" }
         }
 
-        # Always (re)bootstrap pip via ensurepip first.
-        try {
-            & $VenvPy -m ensurepip --upgrade | Out-Null
-        }
-        catch {
-            # ensurepip can be absent in some python builds; if so, just proceed.
-        }
+        # (Re)bootstrap pip via ensurepip, then force-reinstall pip/setuptools/wheel.
+        # This fixes cases where the venv's pip vendored deps are partially upgraded.
+        Invoke-Checked -Exe $VenvPy -Args @("-m", "ensurepip", "--upgrade") -What "ensurepip"
+        Invoke-Checked -Exe $VenvPy -Args @("-m", "pip", "install", "--upgrade", "--force-reinstall", "pip", "setuptools", "wheel") -What "pip bootstrap"
 
-        # Force-reinstall pip to avoid partially-upgraded/corrupt vendored deps.
-        & $VenvPy -m pip install --upgrade --force-reinstall pip setuptools wheel | Out-Null
+        if (-not (Test-PipHealthy -VenvPy $VenvPy)) {
+            throw "pip is still unhealthy after bootstrap"
+        }
     }
 
     Ensure-BuildVenv -Py $py -VenvDir $venvDir -VenvPy $venvPy
 
     Write-Host "[INFO] Installing build deps (pyinstaller + agent)"
-    & $venvPy -m pip install --upgrade pyinstaller | Out-Null
-    & $venvPy -m pip install -e . | Out-Null
+    Invoke-Checked -Exe $venvPy -Args @("-m", "pip", "install", "--upgrade", "pyinstaller") -What "install pyinstaller"
+    Invoke-Checked -Exe $venvPy -Args @("-m", "pip", "install", "-e", ".") -What "install agent"
 
     Write-Host "[INFO] Building with PyInstaller"
     & $venvPy -m PyInstaller --noconfirm --clean packaging/baseliner-agent.spec

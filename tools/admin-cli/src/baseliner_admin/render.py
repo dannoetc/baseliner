@@ -142,6 +142,72 @@ def render_devices_list(console: Console, payload: dict[str, Any], *, title: str
     console.print(t)
 
 
+
+def render_device_tokens_list(
+    console: Console,
+    payload: dict[str, Any],
+    *,
+    title: str = "Device tokens",
+) -> None:
+    items = payload.get("items") or []
+    t = Table(title=title)
+    t.add_column("id", overflow="fold")
+    t.add_column("hash_prefix", overflow="fold")
+    t.add_column("created_at", overflow="fold")
+    t.add_column("revoked_at", overflow="fold")
+    t.add_column("last_used_at", overflow="fold")
+    t.add_column("active")
+    t.add_column("replaced_by_id", overflow="fold")
+
+    for it in items:
+        t.add_row(
+            str(it.get("id") or ""),
+            str(it.get("token_hash_prefix") or ""),
+            str(it.get("created_at") or ""),
+            str(it.get("revoked_at") or ""),
+            str(it.get("last_used_at") or ""),
+            "yes" if it.get("is_active") else "no",
+            str(it.get("replaced_by_id") or ""),
+        )
+    console.print(t)
+
+
+def render_enroll_tokens_list(
+    console: Console,
+    payload: dict[str, Any],
+    *,
+    title: str = "Enroll tokens",
+) -> None:
+    items = payload.get("items") or []
+    t = Table(title=title)
+    t.add_column("id", overflow="fold")
+    t.add_column("created_at", overflow="fold")
+    t.add_column("expires_at", overflow="fold")
+    t.add_column("used_at", overflow="fold")
+    t.add_column("used_by_device_id", overflow="fold")
+    t.add_column("used")
+    t.add_column("expired")
+    t.add_column("note", overflow="fold")
+
+    for tok in items:
+        t.add_row(
+            str(tok.get("id") or ""),
+            str(tok.get("created_at") or ""),
+            str(tok.get("expires_at") or ""),
+            str(tok.get("used_at") or ""),
+            str(tok.get("used_by_device_id") or ""),
+            "yes" if tok.get("is_used") else "no",
+            "yes" if tok.get("is_expired") else "no",
+            _trunc(str(tok.get("note") or ""), 80),
+        )
+
+    console.print(t)
+    console.print(
+        f"total={payload.get('total')} limit={payload.get('limit')} offset={payload.get('offset')}"
+    )
+
+
+
 def render_assignments_list(
     console: Console,
     payload: dict[str, Any],
