@@ -2,7 +2,10 @@
 
 A CLI-first operator/developer tool for administering a Baseliner server.
 
-This is intentionally **CLI first** (not a full-screen TUI yet) so we can iterate quickly on the API contract.
+This intentionally starts as **CLI-first** so we can iterate quickly on the API contract and
+operator workflow.
+
+An experimental, prompt-driven TUI is also available via `baseliner-admin tui`.
 
 ## Install (editable)
 
@@ -14,57 +17,56 @@ pip install -e ./tools/admin-cli
 
 ## Configure
 
-You can pass flags per command, or set environment variables:
+The CLI reads config from env vars (or flags):
 
-- `BASELINER_SERVER_URL` (default: `http://localhost:8000`)
-- `BASELINER_ADMIN_KEY` (required)
+- `BASELINER_SERVER_URL` (example: `http://localhost:8000`)
+- `BASELINER_ADMIN_KEY` (your admin key)
 
 ## Examples
 
-List devices:
-
 ```bash
-baseliner-admin --server http://localhost:8000 devices list
-```
-
-Show debug bundle for a device:
-
-```bash
-baseliner-admin devices show <device-uuid>
-```
-
-Soft delete a device:
-
-```bash
-baseliner-admin devices delete <device-uuid> --reason "testing"
-```
-
-Restore a device (prints new token):
-
-```bash
+baseliner-admin devices list
+baseliner-admin devices debug <device-uuid>
+baseliner-admin devices delete <device-uuid> --reason "decommission"
 baseliner-admin devices restore <device-uuid>
-```
-
-Revoke token (prints new token):
-
-```bash
 baseliner-admin devices revoke-token <device-uuid>
-```
 
-Tail audit:
+baseliner-admin runs list --limit 25
+baseliner-admin runs show <run-uuid> --full
 
-```bash
-baseliner-admin audit tail --limit 20
-baseliner-admin audit tail --action device.delete
-```
+baseliner-admin policies list
+baseliner-admin policies find firefox
+baseliner-admin policies show baseliner-windows-core
+baseliner-admin policies show 00000000-0000-0000-0000-000000000000
+baseliner-admin policies upsert ./policies/baseliner-windows-core.json
 
-Assign policy (by device key; will look up the device id via admin list):
+# Experimental TUI (prompt-driven)
+baseliner-admin tui
 
-```bash
-baseliner-admin assign set --device-key DESKTOP-FTVVO4A --policy-name baseliner-windows-core --mode enforce
+
+baseliner-admin assignments list <device-ref>
+baseliner-admin assignments set <device-ref> <policy-ref> --priority 100 --mode enforce
+baseliner-admin assignments update <device-ref> <policy-ref> --priority 50 --mode audit
+baseliner-admin assignments remove <device-ref> <policy-ref>
+baseliner-admin assignments clone <src-device-ref> <dst-device-ref> --clear-first --priority-offset 0
+baseliner-admin assignments clear <device-ref>
 ```
 
 ## Notes
 
-- `--json` prints raw JSON instead of tables.
-- This tool calls the server admin API (`/api/v1/admin/*`).
+- This tool is intentionally lightweight and relies on the server for pagination and filtering.
+- For machine output, add `--json` to most commands.
+
+## Experimental: TUI
+
+Run:
+
+```bash
+baseliner-admin tui
+```
+
+Notes:
+
+- This is **experimental** and intentionally conservative: it uses prompts + tables (not a full
+  arrow-key interface) so we can iterate safely.
+- Destructive actions (delete device / revoke token) always ask for confirmation.

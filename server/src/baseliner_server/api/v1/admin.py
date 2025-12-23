@@ -29,6 +29,7 @@ from baseliner_server.schemas.admin import (
     AssignPolicyRequest,
     AssignPolicyResponse,
     ClearAssignmentsResponse,
+    RemoveAssignmentResponse,
     CreateEnrollTokenRequest,
     CreateEnrollTokenResponse,
     DeleteDeviceResponse,
@@ -281,6 +282,53 @@ def clear_device_assignments(
 
     db.commit()
     return ClearAssignmentsResponse(device_id=str(device_id), removed=int(removed or 0))
+
+
+@router.delete(
+    "/admin/devices/{device_id}/assignments/{policy_id}",
+    response_model=RemoveAssignmentResponse,
+)
+def remove_device_assignment(
+    request: Request,
+    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    policy_id: uuid.UUID = Path(..., description="Policy UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db: Session = Depends(get_db),
+) -> RemoveAssignmentResponse:
+    """Remove a single policy assignment from a device.
+
+    This is idempotent: if the assignment does not exist, removed=0.
+    """
+
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    removed = (
+        db.query(PolicyAssignment)
+        .filter(
+            PolicyAssignment.device_id == device.id,
+            PolicyAssignment.policy_id == policy_id,
+        )
+        .delete(synchronize_session=False)
+    )
+
+    emit_admin_audit(
+        db,
+        request,
+        actor_id=admin_actor,
+        action="assignment.remove",
+        target_type="device",
+        target_id=str(device.id),
+        data={"policy_id": str(policy_id), "removed": int(removed or 0)},
+    )
+
+    db.commit()
+    return RemoveAssignmentResponse(
+        device_id=str(device_id),
+        policy_id=str(policy_id),
+        removed=int(removed or 0),
+    )
 
 
 @router.delete(

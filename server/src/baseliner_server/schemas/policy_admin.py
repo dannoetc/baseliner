@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -17,6 +20,34 @@ class UpsertPolicyResponse(BaseModel):
     is_active: bool
 
 
-# Backwards-compatible aliases (older clients/tests referenced these names)
+class PolicySummary(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    schema_version: str
+    is_active: bool
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class PoliciesListResponse(BaseModel):
+    items: list[PolicySummary]
+    limit: int
+    offset: int
+    total: int
+
+
+class PolicyDetailResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    schema_version: str
+    is_active: bool
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    document: dict[str, Any]
+
+
+# Backwards-compatible aliases
 PolicyUpsertRequest = UpsertPolicyRequest
 PolicyUpsertResponse = UpsertPolicyResponse

@@ -67,6 +67,12 @@ class ClearAssignmentsResponse(BaseModel):
     removed: int
 
 
+class RemoveAssignmentResponse(BaseModel):
+    device_id: str
+    policy_id: str
+    removed: int
+
+
 class DeleteDeviceResponse(BaseModel):
     device_id: str
     status: str
@@ -142,6 +148,7 @@ __all__ = [
     "PolicyAssignmentOut",
     "DeviceAssignmentsResponse",
     "ClearAssignmentsResponse",
+    "RemoveAssignmentResponse",
     "DeleteDeviceResponse",
     "RestoreDeviceResponse",
     "RevokeDeviceTokenResponse",

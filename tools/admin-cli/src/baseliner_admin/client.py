@@ -18,11 +18,26 @@ class ApiError(RuntimeError):
 class ClientConfig:
     server: str
     admin_key: str
-    timeout_s: float = 10.0
+    timeout_s: float = 15.0
 
 
 class BaselinerAdminClient:
-    def __init__(self, cfg: ClientConfig):
+    def __init__(
+        self,
+        cfg: ClientConfig | None = None,
+        *,
+        # Back-compat for older call sites.
+        base_url: str | None = None,
+        admin_key: str | None = None,
+        timeout_s: float = 15.0,
+    ):
+        if cfg is None:
+            cfg = ClientConfig(
+                server=str(base_url or ""),
+                admin_key=str(admin_key or ""),
+                timeout_s=float(timeout_s),
+            )
+
         server = (cfg.server or "").rstrip("/")
         if not server:
             raise ValueError("server is required")
@@ -33,7 +48,11 @@ class BaselinerAdminClient:
         self._client = httpx.Client(
             base_url=server,
             timeout=cfg.timeout_s,
-            headers={"X-Admin-Key": cfg.admin_key},
+            headers={
+                "X-Admin-Key": cfg.admin_key,
+                "Accept": "application/json",
+                "User-Agent": "baseliner-admin-cli",
+            },
         )
 
     def close(self) -> None:
@@ -48,11 +67,9 @@ class BaselinerAdminClient:
         json_body: Any | None = None,
     ) -> Any:
         r = self._client.request(method, path, params=params, json=json_body)
-
         if r.status_code >= 400:
-            detail: Any
             try:
-                detail = r.json()
+                detail: Any = r.json()
             except Exception:
                 detail = r.text
             raise ApiError(r.status_code, detail)
@@ -60,33 +77,106 @@ class BaselinerAdminClient:
         if r.status_code == 204:
             return None
 
-        # Most endpoints return JSON.
         try:
             return r.json()
         except json.JSONDecodeError:
             return r.text
 
-    # High-level helpers
+    @staticmethod
+    def pretty_json(obj: Any) -> str:
+        return json.dumps(obj, indent=2, sort_keys=True, default=str)
 
-    def list_devices(self, *, limit: int = 50, offset: int = 0, **params: Any) -> Any:
-        qp: dict[str, Any] = {"limit": int(limit), "offset": int(offset)}
-        qp.update({k: v for k, v in params.items() if v is not None})
-        return self.request("GET", "/api/v1/admin/devices", params=qp)
+    # ---- Admin helpers ----
 
-    def get_device_debug(self, device_id: str) -> Any:
+    def devices_list(
+        self, *, limit: int = 50, offset: int = 0, include_deleted: bool = False
+    ) -> Any:
+        return self.request(
+            "GET",
+            "/api/v1/admin/devices",
+            params={
+                "limit": int(limit),
+                "offset": int(offset),
+                "include_deleted": str(bool(include_deleted)).lower(),
+            },
+        )
+
+    def devices_debug(self, device_id: str) -> Any:
         return self.request("GET", f"/api/v1/admin/devices/{device_id}/debug")
 
-    def delete_device(self, device_id: str, *, reason: str | None = None) -> Any:
-        params = {"reason": reason} if reason else None
+    def devices_delete(self, device_id: str, *, reason: str | None = None) -> Any:
+        params: dict[str, Any] = {}
+        if reason:
+            params["reason"] = reason
         return self.request("DELETE", f"/api/v1/admin/devices/{device_id}", params=params)
 
-    def restore_device(self, device_id: str) -> Any:
+    def devices_restore(self, device_id: str) -> Any:
         return self.request("POST", f"/api/v1/admin/devices/{device_id}/restore")
 
-    def revoke_device_token(self, device_id: str) -> Any:
+    def devices_revoke_token(self, device_id: str) -> Any:
         return self.request("POST", f"/api/v1/admin/devices/{device_id}/revoke-token")
 
-    def list_audit(
+    def device_assignments_list(self, device_id: str) -> Any:
+        return self.request("GET", f"/api/v1/admin/devices/{device_id}/assignments")
+
+    def device_assignments_clear(self, device_id: str) -> Any:
+        return self.request("DELETE", f"/api/v1/admin/devices/{device_id}/assignments")
+
+    def device_assignment_remove(self, device_id: str, policy_id: str) -> Any:
+        return self.request(
+            "DELETE",
+            f"/api/v1/admin/devices/{device_id}/assignments/{policy_id}",
+        )
+
+    def assignment_set(
+        self,
+        *,
+        device_id: str,
+        policy_name: str,
+        priority: int,
+        mode: str = "enforce",
+    ) -> Any:
+        payload = {
+            "device_id": device_id,
+            "policy_name": policy_name,
+            "priority": int(priority),
+            "mode": mode,
+        }
+        return self.request("POST", "/api/v1/admin/assign-policy", json_body=payload)
+
+    def policies_list(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        include_inactive: bool = False,
+        q: str | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {"limit": int(limit), "offset": int(offset)}
+        if include_inactive:
+            params["include_inactive"] = True
+        if q:
+            params["q"] = q
+        return self.request("GET", "/api/v1/admin/policies", params=params)
+
+    def policies_show(self, policy_id: str) -> Any:
+        return self.request("GET", f"/api/v1/admin/policies/{policy_id}")
+
+    def policies_upsert(self, payload: Mapping[str, Any]) -> Any:
+        return self.request("POST", "/api/v1/admin/policies", json_body=dict(payload))
+
+    def runs_list(
+        self, *, limit: int = 50, offset: int = 0, device_id: str | None = None
+    ) -> Any:
+        params: dict[str, Any] = {"limit": int(limit), "offset": int(offset)}
+        if device_id:
+            params["device_id"] = device_id
+        return self.request("GET", "/api/v1/admin/runs", params=params)
+
+    def runs_show(self, run_id: str) -> Any:
+        return self.request("GET", f"/api/v1/admin/runs/{run_id}")
+
+    def audit_list(
         self,
         *,
         limit: int = 100,
@@ -95,40 +185,13 @@ class BaselinerAdminClient:
         target_type: str | None = None,
         target_id: str | None = None,
     ) -> Any:
-        qp: dict[str, Any] = {"limit": int(limit)}
+        params: dict[str, Any] = {"limit": int(limit)}
         if cursor:
-            qp["cursor"] = cursor
+            params["cursor"] = cursor
         if action:
-            qp["action"] = action
+            params["action"] = action
         if target_type:
-            qp["target_type"] = target_type
+            params["target_type"] = target_type
         if target_id:
-            qp["target_id"] = target_id
-        return self.request("GET", "/api/v1/admin/audit", params=qp)
-
-    def list_runs(
-        self,
-        *,
-        device_id: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> Any:
-        qp: dict[str, Any] = {"limit": int(limit), "offset": int(offset)}
-        if device_id:
-            qp["device_id"] = device_id
-        return self.request("GET", "/api/v1/admin/runs", params=qp)
-
-    def get_run_detail(self, run_id: str) -> Any:
-        return self.request("GET", f"/api/v1/admin/runs/{run_id}")
-
-    def upsert_policy(self, payload: dict[str, Any]) -> Any:
-        return self.request("POST", "/api/v1/admin/policies", json_body=payload)
-
-    def assign_policy(self, payload: dict[str, Any]) -> Any:
-        return self.request("POST", "/api/v1/admin/assign-policy", json_body=payload)
-
-    def list_device_assignments(self, device_id: str) -> Any:
-        return self.request("GET", f"/api/v1/admin/devices/{device_id}/assignments")
-
-    def clear_device_assignments(self, device_id: str) -> Any:
-        return self.request("DELETE", f"/api/v1/admin/devices/{device_id}/assignments")
+            params["target_id"] = target_id
+        return self.request("GET", "/api/v1/admin/audit", params=params)
