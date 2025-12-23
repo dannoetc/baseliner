@@ -1,12 +1,14 @@
 from fastapi import FastAPI
 
+from baseliner_server import __version__
+
 from baseliner_server.api.v1.router import router as v1_router
 from baseliner_server.core.config import settings
 from baseliner_server.middleware.correlation import CorrelationIdMiddleware
 from baseliner_server.middleware.rate_limit import InMemoryRateLimiter, RateLimitConfig
 from baseliner_server.middleware.request_size import RequestSizeLimitMiddleware, RequestSizeLimits
 
-app = FastAPI(title="Baseliner API", version="0.1.0")
+app = FastAPI(title="Baseliner API", version=__version__)
 
 # --- Request hardening (Issue #23) ---
 # Configurable via env vars (see `baseliner_server.core.config.Settings`).
