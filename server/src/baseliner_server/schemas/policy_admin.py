@@ -20,6 +20,11 @@ class UpsertPolicyResponse(BaseModel):
     is_active: bool
 
 
+# Backwards-compatible aliases (older clients/tests referenced these names)
+PolicyUpsertRequest = UpsertPolicyRequest
+PolicyUpsertResponse = UpsertPolicyResponse
+
+
 class PolicySummary(BaseModel):
     id: str
     name: str
@@ -46,8 +51,3 @@ class PolicyDetailResponse(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     document: dict[str, Any]
-
-
-# Backwards-compatible aliases
-PolicyUpsertRequest = UpsertPolicyRequest
-PolicyUpsertResponse = UpsertPolicyResponse

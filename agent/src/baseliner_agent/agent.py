@@ -5,6 +5,7 @@ import json
 import platform
 import socket
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from .agent_health import write_health
@@ -54,6 +55,7 @@ def _offline_report(*, state: AgentState, started: str, ended: str, error: str) 
         "started_at": started,
         "ended_at": ended,
         "status": "failed",
+        "run_kind": "apply",
         "agent_version": state.agent_version,
         "effective_policy_hash": "",
         "policy_snapshot": {
@@ -218,7 +220,8 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         pol = pol_resp.data
         policy_request_id = pol_resp.request_id
     except Exception as e:
-        ended = utcnow_iso()
+        run_ended_dt = datetime.now(timezone.utc)
+        ended = run_ended_dt.isoformat()
         err = str(e)
 
         log_event(
@@ -303,6 +306,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "correlation_id": local_run_id,
             "mode": mode,
             "effective_policy_hash": effective_hash,
+        "run_kind": "apply",
             "resources_count": len(resources),
             "no_policy_assigned": bool(no_policy_assigned),
             "policy_id": pol.get("policy_id"),
@@ -375,7 +379,8 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             },
         )
 
-    ended = utcnow_iso()
+    run_ended_dt = datetime.now(timezone.utc)
+    ended = run_ended_dt.isoformat()
     status = "succeeded" if items_failed == 0 else "failed"
 
     logs.append(
@@ -394,9 +399,17 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
 
     observed_state_hash = _compute_observed_state_hash(items)
 
+    duration_ms: int | None = None
+    try:
+        duration_ms = int((run_ended_dt - run_started_dt).total_seconds() * 1000)
+    except Exception:
+        duration_ms = None
+
     # Use snake_case for server + ui; keep a couple legacy keys too.
     summary: dict[str, Any] = {
         "items_total": items_total,
+        "duration_ms": duration_ms,
+        "run_kind": "apply",
         "items_failed": items_failed,
         "items_changed": items_changed,
         "ok": ok,
@@ -418,6 +431,8 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
             "status": status,
             "ok": ok,
             "items_total": items_total,
+        "duration_ms": duration_ms,
+        "run_kind": "apply",
             "items_failed": items_failed,
             "items_changed": items_changed,
             "observed_state_hash": observed_state_hash,
@@ -432,10 +447,12 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
         "status": status,
         "agent_version": state.agent_version,
         "effective_policy_hash": effective_hash,
+        "run_kind": "apply",
         "policy_snapshot": {
             "policy_id": pol.get("policy_id"),
             "policy_name": pol.get("policy_name"),
             "effective_policy_hash": effective_hash,
+        "run_kind": "apply",
         },
         "summary": summary,
         "items": items,
@@ -517,6 +534,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
                 "correlation_id": local_run_id,
                 "server_run_id": run_id,
                 "effective_policy_hash": effective_hash,
+        "run_kind": "apply",
                 "request_id": report_request_id,
             },
         )
@@ -542,6 +560,7 @@ def run_once(server: str, state_dir: str, force: bool = False) -> None:
                 "error": str(e),
                 "queued_path": str(path),
                 "effective_policy_hash": effective_hash,
+        "run_kind": "apply",
             },
         )
 
@@ -662,3 +681,174 @@ def _flush_queue(
             write_health(state_dir, state=state)
         except Exception:
             pass
+
+
+
+def heartbeat_once(*, server: str, state_dir: str, log_console: bool = False) -> dict[str, Any]:
+    """Lightweight 'I'm alive' run.
+
+    Behavior:
+      - Fetch /api/v1/device/policy (auth check + policy hash, updates last_seen_at server-side)
+      - POST /api/v1/device/reports with run_kind="heartbeat" (best-effort)
+      - Update local state + health.json
+
+    Returns a small dict:
+      {"ok": bool, "post_ok": bool, "policy_changed": bool, "effective_policy_hash": str|None}
+    """
+
+    state = AgentState.load(state_dir)
+    state.last_server_url = server
+
+    local_run_id = str(uuid.uuid4())
+    started_dt = datetime.now(timezone.utc)
+    started = started_dt.isoformat()
+
+    # Heartbeats should be quick and never hang the agent.
+    timeout_s = 15
+
+    try:
+        device_token = state.load_device_token(state_dir)
+    except Exception as e:
+        # Not enrolled yet.
+        err = str(e)
+        state.last_heartbeat_at = utcnow_iso()
+        state.last_heartbeat_status = "failed"
+        state.save(state_dir)
+        try:
+            write_health(state_dir, state=state)
+        except Exception:
+            pass
+        if log_console:
+            print(f"[heartbeat] not enrolled: {err}")
+        return {
+            "ok": False,
+            "post_ok": False,
+            "policy_changed": False,
+            "effective_policy_hash": None,
+            "error": err,
+        }
+
+    client = ApiClient(server, device_token=device_token, correlation_id=local_run_id, timeout_s=timeout_s)
+
+    effective_hash: str | None = None
+    mode: str | None = None
+    policy_doc: dict[str, Any] = {}
+    policy_changed = False
+    ok = False
+    post_ok = False
+    err: str | None = None
+
+    # Fetch policy (this updates last_seen_at server-side).
+    try:
+        pol_resp = client.get_json("/api/v1/device/policy", retries=0, correlation_id=local_run_id)
+        pol = pol_resp.data or {}
+        effective_hash = pol.get("effective_policy_hash") or None
+        if not effective_hash:
+            effective_hash = _canonical_policy_hash(pol)
+
+        mode = (pol.get("mode") or None) if isinstance(pol, dict) else None
+        policy_doc = (pol.get("document") or {}) if isinstance(pol, dict) else {}
+
+        state.last_policy_poll_at = started
+        state.last_polled_policy_hash = effective_hash
+        state.last_http_ok_at = started
+        ok = True
+    except Exception as e:
+        err = str(e)
+        ended = utcnow_iso()
+        state.last_heartbeat_at = ended
+        state.last_heartbeat_status = "failed"
+        state.save(state_dir)
+        try:
+            write_health(state_dir, state=state)
+        except Exception:
+            pass
+        if log_console:
+            print(f"[heartbeat] failed to fetch policy: {err}")
+        return {
+            "ok": False,
+            "post_ok": False,
+            "policy_changed": False,
+            "effective_policy_hash": None,
+            "error": err,
+        }
+
+    if effective_hash and state.last_applied_policy_hash:
+        policy_changed = effective_hash != state.last_applied_policy_hash
+
+    ended_dt = datetime.now(timezone.utc)
+    ended = ended_dt.isoformat()
+    try:
+        duration_ms = int((ended_dt - started_dt).total_seconds() * 1000)
+    except Exception:
+        duration_ms = None
+
+    report = {
+        "correlation_id": local_run_id,
+        "started_at": started,
+        "ended_at": ended,
+        "status": "succeeded",
+        "run_kind": "heartbeat",
+        "agent_version": state.agent_version,
+        "effective_policy_hash": effective_hash,
+        "policy_snapshot": {"mode": mode, "document": policy_doc},
+        "summary": {
+            "run_kind": "heartbeat",
+            "duration_ms": duration_ms,
+            "policy_changed": bool(policy_changed),
+            "items_total": 0,
+            "items_failed": 0,
+            "items_changed": 0,
+        },
+        "items": [],
+        "logs": [
+            {
+                "ts": started,
+                "level": "info",
+                "message": "Heartbeat",
+                "data": {
+                    "effective_policy_hash": effective_hash,
+                    "policy_changed": bool(policy_changed),
+                    "mode": mode,
+                },
+            }
+        ],
+    }
+
+    # Best-effort: heartbeats are not queued.
+    try:
+        client.post_json(
+            "/api/v1/device/reports",
+            report,
+            retries=0,
+            correlation_id=local_run_id,
+        )
+        post_ok = True
+        state.last_http_ok_at = utcnow_iso()
+    except Exception as e:
+        err = str(e)
+        post_ok = False
+
+    state.last_heartbeat_at = ended
+    state.last_heartbeat_status = "succeeded" if post_ok else "failed"
+    state.save(state_dir)
+    try:
+        write_health(state_dir, state=state)
+    except Exception:
+        pass
+
+    if log_console:
+        if post_ok:
+            print(
+                f"[heartbeat] ok effective_policy_hash={effective_hash} policy_changed={policy_changed}"
+            )
+        else:
+            print(f"[heartbeat] post failed: {err}")
+
+    return {
+        "ok": bool(ok),
+        "post_ok": bool(post_ok),
+        "policy_changed": bool(policy_changed),
+        "effective_policy_hash": effective_hash,
+        "error": err,
+    }

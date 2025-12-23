@@ -80,6 +80,11 @@ class RunStatus(str, enum.Enum):
     partial = "partial"
 
 
+class RunKind(str, enum.Enum):
+    apply = "apply"
+    heartbeat = "heartbeat"
+
+
 class StepStatus(str, enum.Enum):
     not_run = "not_run"
     ok = "ok"
@@ -274,6 +279,10 @@ class Run(Base):
 
     effective_policy_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    kind: Mapped[RunKind] = mapped_column(
+        Enum(RunKind), nullable=False, default=RunKind.apply
+    )
+
     status: Mapped[RunStatus] = mapped_column(
         Enum(RunStatus), nullable=False, default=RunStatus.running
     )
@@ -299,6 +308,7 @@ class Run(Base):
 
     __table_args__ = (
         Index("ix_runs_device_id_started_at", "device_id", "started_at"),
+        Index("ix_runs_device_id_kind_started_at", "device_id", "kind", "started_at"),
         Index("ix_runs_correlation_id", "correlation_id"),
     )
 

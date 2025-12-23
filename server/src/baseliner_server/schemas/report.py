@@ -36,6 +36,11 @@ class ReportLogEvent(BaseModel):
 
 class SubmitReportRequest(BaseModel):
     started_at: datetime
+
+    run_kind: str = Field(
+        default="apply",
+        description="Run kind for health/reporting: apply | heartbeat",
+    )
     ended_at: datetime | None = None
     status: str = "running"
     agent_version: str | None = None

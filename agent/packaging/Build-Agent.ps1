@@ -70,14 +70,48 @@ try {
     $venvDir = Join-Path $agentRoot ".venv-build"
     $venvPy = Join-Path $venvDir "Scripts\python.exe"
 
-    if (-not (Test-Path -LiteralPath $venvPy)) {
-        Write-Host "[INFO] Creating build venv: $venvDir"
-        $code = Invoke-Python -Py $py -Args @("-m", "venv", $venvDir)
-        if ($code -ne 0) { throw "venv creation failed (exit $code)" }
+    function Ensure-BuildVenv {
+        param([string]$Py, [string]$VenvDir, [string]$VenvPy)
+
+        $needsCreate = -not (Test-Path -LiteralPath $VenvPy)
+
+        if (-not $needsCreate) {
+            # If pip is broken/corrupted, recreate the venv.
+            try {
+                & $VenvPy -m pip --version | Out-Null
+            }
+            catch {
+                Write-Host "[WARN] Build venv pip appears broken; recreating: $VenvDir"
+                $needsCreate = $true
+            }
+        }
+
+        if ($needsCreate) {
+            if (Test-Path -LiteralPath $VenvDir) {
+                Remove-Item -Recurse -Force -LiteralPath $VenvDir
+            }
+
+            Write-Host "[INFO] Creating build venv: $VenvDir"
+            # --upgrade-deps ensures pip/setuptools are refreshed (Python 3.12+)
+            $code = Invoke-Python -Py $Py -Args @("-m", "venv", "--upgrade-deps", $VenvDir)
+            if ($code -ne 0) { throw "venv creation failed (exit $code)" }
+        }
+
+        # Always (re)bootstrap pip via ensurepip first.
+        try {
+            & $VenvPy -m ensurepip --upgrade | Out-Null
+        }
+        catch {
+            # ensurepip can be absent in some python builds; if so, just proceed.
+        }
+
+        # Force-reinstall pip to avoid partially-upgraded/corrupt vendored deps.
+        & $VenvPy -m pip install --upgrade --force-reinstall pip setuptools wheel | Out-Null
     }
 
+    Ensure-BuildVenv -Py $py -VenvDir $venvDir -VenvPy $venvPy
+
     Write-Host "[INFO] Installing build deps (pyinstaller + agent)"
-    & $venvPy -m pip install --upgrade pip | Out-Null
     & $venvPy -m pip install --upgrade pyinstaller | Out-Null
     & $venvPy -m pip install -e . | Out-Null
 

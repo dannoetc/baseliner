@@ -4,11 +4,12 @@ import os
 import random
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .agent import enroll_device, run_once
-from .agent_health import build_health, write_health
+from .agent import enroll_device, heartbeat_once, run_once
+from .agent_health import write_health
 from .config import default_config_path, load_config, merge_tags
 from .state import AgentState, default_state_dir
 from .support_bundle import create_support_bundle, default_bundle_path
@@ -33,12 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config",
         default=str(cfg_path),
-        help="Config file path (default: %%ProgramData%%\\Baseliner\\agent.toml)",
+        help="Config file path (default: %ProgramData%\\Baseliner\\agent.toml)",
     )
     parser.add_argument(
         "--state-dir",
         default=str(cfg.state_dir or default_state_dir()),
-        help="State directory (default: %%ProgramData%%\\Baseliner)",
+        help="State directory (default: %ProgramData%\\Baseliner)",
     )
 
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -58,7 +59,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # ENROLL
-    p_enroll = sub.add_parser("enroll", help="Enroll this device using a one-time enrollment token")
+    p_enroll = sub.add_parser(
+        "enroll", help="Enroll this device using a one-time enrollment token"
+    )
     p_enroll.add_argument(
         "--server",
         required=(cfg.server_url is None),
@@ -94,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # RUN-LOOP
     p_loop = sub.add_parser(
-        "run-loop", help="Run continuously: poll policy and apply on an interval"
+        "run-loop", help="Run continuously: apply on an interval (optional heartbeat)"
     )
     p_loop.add_argument(
         "--server",
@@ -106,7 +109,13 @@ def main(argv: list[str] | None = None) -> int:
         "--interval",
         type=int,
         default=cfg.poll_interval_seconds,
-        help="Poll interval in seconds (default: %(default)s)",
+        help="Apply interval in seconds (default: %(default)s)",
+    )
+    p_loop.add_argument(
+        "--heartbeat-interval",
+        type=int,
+        default=0,
+        help="If set > 0, post heartbeat runs on this interval in seconds (default: %(default)s)",
     )
     p_loop.add_argument(
         "--jitter",
@@ -132,7 +141,9 @@ def main(argv: list[str] | None = None) -> int:
         "--since-hours",
         type=int,
         default=24,
-        help="Include run logs / queued reports modified within the last N hours (default: %(default)s)",
+        help=(
+            "Include run logs / queued reports modified within the last N hours (default: %(default)s)"
+        ),
     )
     p_sb.add_argument(
         "--max-run-logs",
@@ -182,20 +193,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.cmd == "run-once":
-            run_once(server=args.server, state_dir=state_dir, force=args.force)
+            run_once(server=args.server, state_dir=state_dir, force=bool(args.force))
             return 0
 
         if args.cmd == "run-loop":
-            interval = int(args.interval)
-            jitter = int(args.jitter)
-            print(
-                f"[OK] Starting run-loop interval={interval}s jitter={jitter}s server={args.server}"
+            _run_loop(
+                server=args.server,
+                state_dir=state_dir,
+                apply_interval=int(args.interval),
+                heartbeat_interval=int(args.heartbeat_interval),
+                jitter=int(args.jitter),
+                force=bool(args.force),
             )
-            while True:
-                run_once(server=args.server, state_dir=state_dir, force=args.force)
-                sleep_s = _sleep_with_jitter(interval, jitter)
-                print(f"[OK] Sleeping {sleep_s}s")
-                time.sleep(sleep_s)
+            return 0
 
         if args.cmd == "support-bundle":
             cfg2 = load_config(Path(args.config).expanduser())
@@ -227,6 +237,66 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _run_loop(
+    *,
+    server: str,
+    state_dir: str,
+    apply_interval: int,
+    heartbeat_interval: int,
+    jitter: int,
+    force: bool,
+) -> None:
+    apply_interval = max(1, int(apply_interval))
+    heartbeat_interval = max(0, int(heartbeat_interval))
+    jitter = max(0, int(jitter))
+
+    print(
+        f"[baseliner-agent] run-loop: apply_interval={apply_interval}s "
+        f"heartbeat_interval={heartbeat_interval}s jitter={jitter}s server={server}"
+    )
+
+    next_apply = time.time()
+    next_hb: float | None = time.time() if heartbeat_interval > 0 else None
+
+    while True:
+        now = time.time()
+
+        # Heartbeat: keeps server last_seen fresh and can trigger an immediate apply.
+        if next_hb is not None and now >= next_hb:
+            res = heartbeat_once(server=server, state_dir=state_dir, log_console=True)
+            if bool(res.get("policy_changed")):
+                next_apply = min(next_apply, time.time())
+            next_hb = time.time() + _sleep_with_jitter(heartbeat_interval, jitter)
+
+        now = time.time()
+
+        if now >= next_apply:
+            run_once(server=server, state_dir=state_dir, force=force)
+            next_apply = time.time() + _sleep_with_jitter(apply_interval, jitter)
+
+        # Update scheduler metadata for local visibility (health.json, support bundles, etc.)
+        st = AgentState.load(state_dir)
+        st.apply_interval_seconds = apply_interval
+        st.heartbeat_interval_seconds = heartbeat_interval
+        st.next_apply_due_at = datetime.fromtimestamp(next_apply, tz=timezone.utc).isoformat()
+        if next_hb is not None:
+            st.next_heartbeat_due_at = datetime.fromtimestamp(next_hb, tz=timezone.utc).isoformat()
+        else:
+            st.next_heartbeat_due_at = None
+
+        # Persist state first (so health references stable values), then write health.json.
+        st.save(state_dir)
+        try:
+            write_health(state_dir, state=st)
+        except Exception:
+            pass
+
+        # Sleep until the next scheduled operation.
+        next_due = next_apply if next_hb is None else min(next_apply, next_hb)
+        sleep_s = max(1, int(next_due - time.time()))
+        time.sleep(sleep_s)
+
+
 def _parse_tags(s: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if not s.strip():
@@ -242,7 +312,7 @@ def _parse_tags(s: str) -> dict[str, Any]:
 
 
 def _redact_config_for_print(cfg: Any) -> dict[str, Any]:
-    d = {
+    return {
         "server_url": cfg.server_url,
         "enroll_token": "***redacted***" if getattr(cfg, "enroll_token", None) else None,
         "poll_interval_seconds": cfg.poll_interval_seconds,
@@ -251,7 +321,6 @@ def _redact_config_for_print(cfg: Any) -> dict[str, Any]:
         "state_dir": cfg.state_dir,
         "winget_path": getattr(cfg, "winget_path", None),
     }
-    return d
 
 
 def _sleep_with_jitter(base_seconds: int, jitter_seconds: int) -> int:

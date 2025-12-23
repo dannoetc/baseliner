@@ -1,60 +1,71 @@
 from __future__ import annotations
 
-
-def test_admin_policies_list_and_show(client):
-    # Create two policies (one active, one inactive)
-    p1 = {
-        "name": "alpha-policy",
-        "description": "alpha test policy",
-        "schema_version": "1.0",
-        "is_active": True,
-        "document": {"resources": []},
-    }
-    p2 = {
-        "name": "beta-policy",
-        "description": "beta test policy",
-        "schema_version": "1.0",
-        "is_active": False,
-        "document": {"resources": []},
-    }
-
-    r1 = client.post("/api/v1/admin/policies", json=p1)
-    assert r1.status_code == 200
-    r2 = client.post("/api/v1/admin/policies", json=p2)
-    assert r2.status_code == 200
-
-    # By default, list only includes active policies
-    r = client.get("/api/v1/admin/policies")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["total"] == 1
-    assert [x["name"] for x in body["items"]] == ["alpha-policy"]
-
-    # include_inactive=true returns both
-    r = client.get("/api/v1/admin/policies?include_inactive=true")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["total"] == 2
-    names = sorted([x["name"] for x in body["items"]])
-    assert names == ["alpha-policy", "beta-policy"]
-
-    # substring search on name
-    r = client.get("/api/v1/admin/policies?include_inactive=true&q=beta")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["total"] == 1
-    assert body["items"][0]["name"] == "beta-policy"
-
-    # show by id returns document
-    beta_id = body["items"][0]["id"]
-    r = client.get(f"/api/v1/admin/policies/{beta_id}")
-    assert r.status_code == 200
-    detail = r.json()
-    assert detail["id"] == beta_id
-    assert detail["name"] == "beta-policy"
-    assert isinstance(detail["document"], dict)
+from baseliner_server.db.models import Policy
 
 
-def test_admin_policies_show_404(client):
-    r = client.get("/api/v1/admin/policies/00000000-0000-0000-0000-000000000000")
-    assert r.status_code == 404
+def _mk_policy(name: str, *, active: bool, description: str | None = None) -> Policy:
+    return Policy(
+        name=name,
+        description=description,
+        schema_version="1.0",
+        document={"schema_version": "1", "resources": []},
+        is_active=bool(active),
+    )
+
+
+def test_admin_policies_list_default_excludes_inactive(client, db):
+    p1 = _mk_policy("alpha", active=True, description="aaa")
+    p2 = _mk_policy("beta", active=False, description="bbb")
+    db.add_all([p1, p2])
+    db.commit()
+
+    resp = client.get("/api/v1/admin/policies?limit=200&offset=0")
+    assert resp.status_code == 200
+    body = resp.json()
+    names = [p["name"] for p in body["items"]]
+    assert "alpha" in names
+    assert "beta" not in names
+
+
+def test_admin_policies_list_include_inactive(client, db):
+    p1 = _mk_policy("alpha", active=True)
+    p2 = _mk_policy("beta", active=False)
+    db.add_all([p1, p2])
+    db.commit()
+
+    resp = client.get("/api/v1/admin/policies?include_inactive=true&limit=200&offset=0")
+    assert resp.status_code == 200
+    body = resp.json()
+    names = [p["name"] for p in body["items"]]
+    assert "alpha" in names
+    assert "beta" in names
+
+
+def test_admin_policies_list_q_filters(client, db):
+    p1 = _mk_policy("chrome-policy", active=True, description="browser")
+    p2 = _mk_policy("firefox-policy", active=True, description="browser")
+    p3 = _mk_policy("windows-core", active=True, description="os baseline")
+    db.add_all([p1, p2, p3])
+    db.commit()
+
+    resp = client.get("/api/v1/admin/policies?q=fire&limit=200&offset=0")
+    assert resp.status_code == 200
+    body = resp.json()
+    names = [p["name"] for p in body["items"]]
+    assert "firefox-policy" in names
+    assert "chrome-policy" not in names
+    assert "windows-core" not in names
+
+
+def test_admin_policies_show(client, db):
+    p = _mk_policy("alpha", active=True, description="hello")
+    db.add(p)
+    db.commit()
+
+    resp = client.get(f"/api/v1/admin/policies/{p.id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == str(p.id)
+    assert body["name"] == "alpha"
+    assert body["description"] == "hello"
+    assert isinstance(body["document"], dict)

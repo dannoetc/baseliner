@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 # NOTE: dependencies live in api.deps; core.auth only contains the auth logic.
 from baseliner_server.api.deps import get_current_device, get_db
-from baseliner_server.db.models import Device, LogEvent, Run, RunItem, RunStatus, StepStatus
+from baseliner_server.db.models import Device, LogEvent, Run, RunItem, RunKind, RunStatus, StepStatus
 from baseliner_server.middleware.rate_limit import enforce_device_reports_rate_limit
 from baseliner_server.schemas.policy import EffectivePolicyResponse
 from baseliner_server.schemas.report import SubmitReportRequest, SubmitReportResponse
@@ -192,6 +192,9 @@ def submit_report(
         device_id=device.id,
         started_at=payload.started_at,
         ended_at=ended_at,
+        kind=RunKind((payload.run_kind or "apply").lower())
+        if (payload.run_kind or "apply").lower() in ("apply", "heartbeat")
+        else RunKind.apply,
         status=status,
         agent_version=payload.agent_version,
         correlation_id=getattr(getattr(request, "state", None), "correlation_id", None),
