@@ -49,8 +49,49 @@ baseliner-admin assignments set <device-ref> <policy-ref> --priority 100 --mode 
 baseliner-admin assignments update <device-ref> <policy-ref> --priority 50 --mode audit
 baseliner-admin assignments remove <device-ref> <policy-ref>
 baseliner-admin assignments clone <src-device-ref> <dst-device-ref> --clear-first --priority-offset 0
+baseliner-admin assignments apply <device-ref> ./assignments.json --merge --plan
+baseliner-admin assignments apply <device-ref> ./assignments.json --yes
 baseliner-admin assignments clear <device-ref>
 ```
+
+### Bulk apply assignments from a file
+
+Use this to "bulk set" assignments for a device from a JSON file.
+
+```bash
+baseliner-admin assignments apply <device-ref> ./assignments.json --plan
+baseliner-admin assignments apply <device-ref> ./assignments.json --merge
+baseliner-admin assignments apply <device-ref> ./assignments.json --clear-first
+```
+
+File formats supported:
+
+- A JSON list of assignment objects
+- Or an object with an `assignments` key containing that list
+
+Each assignment object accepts:
+
+- `policy`: policy name, UUID, or substring (must resolve uniquely)
+- `mode`: `enforce` or `audit` (default: `enforce`)
+- `priority`: integer (default: `100`)
+
+Example:
+
+```json
+{
+  "assignments": [
+    {"policy": "baseliner-windows-core", "mode": "enforce", "priority": 100},
+    {"policy": "firefox", "mode": "audit", "priority": 200}
+  ]
+}
+```
+
+Behavior:
+
+- Default: **sync** to the file (adds/updates desired assignments and removes assignments not present)
+- `--merge`: add/update only; do **not** remove extras
+- `--clear-first`: clears all current assignments, then sets those in the file
+
 
 ## Notes
 

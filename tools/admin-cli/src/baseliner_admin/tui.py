@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from rich.console import Console
@@ -10,13 +11,14 @@ from rich.table import Table
 from baseliner_admin.client import BaselinerAdminClient
 from baseliner_admin.render import (
     render_assignments_list,
+    render_assignments_plan,
     render_devices_list,
     render_policy_detail,
     render_policies_list,
     render_run_detail,
     render_runs_list,
 )
-from baseliner_admin.util import try_parse_uuid
+from baseliner_admin.util import read_json_file, try_parse_uuid
 
 
 @dataclass(frozen=True)
@@ -235,7 +237,7 @@ def _device_assignments_menu(
         assignments = list(payload.get("assignments") or [])
         action = Prompt.ask(
             "Action",
-            choices=["set", "edit", "remove", "clone", "clear", "refresh", "back"],
+            choices=["set", "edit", "remove", "clone", "apply-file", "clear", "refresh", "back"],
             default="set",
         )
 
@@ -335,6 +337,249 @@ def _device_assignments_menu(
             _pause(console)
             continue
 
+        if action == "apply-file":
+            path_s = Prompt.ask("Assignments file path (json)").strip()
+            if not path_s:
+                continue
+
+            try:
+                obj = read_json_file(Path(path_s))
+            except Exception as e:
+                console.print(f"[red]Failed to read JSON:[/red] {e}")
+                _pause(console)
+                continue
+
+            if isinstance(obj, dict) and "assignments" in obj:
+                obj = obj.get("assignments")
+
+            if not isinstance(obj, list):
+                console.print("Assignments file must be a JSON list or an object with an 'assignments' list")
+                _pause(console)
+                continue
+
+            desired: list[dict[str, Any]] = []
+
+            for i, spec in enumerate(obj):
+                if not isinstance(spec, dict):
+                    console.print(f"Entry #{i + 1} is not an object")
+                    _pause(console)
+                    desired = []
+                    break
+
+                pref = (
+                    spec.get("policy")
+                    or spec.get("policy_ref")
+                    or spec.get("policy_name")
+                    or spec.get("policy_id")
+                )
+                if not pref:
+                    console.print(f"Entry #{i + 1} is missing 'policy'/'policy_name'/'policy_id'")
+                    _pause(console)
+                    desired = []
+                    break
+
+                policy_id = str(spec.get("policy_id") or "").strip()
+                policy_name = str(spec.get("policy_name") or "").strip()
+
+                # Resolve policy if needed.
+                if not policy_id or not policy_name:
+                    ref = str(pref).strip()
+                    pol: dict[str, Any] | None = None
+
+                    uid = try_parse_uuid(ref)
+                    if uid:
+                        try:
+                            pol = client.policies_show(str(uid))
+                        except Exception as e:
+                            console.print(f"[red]Failed to resolve policy UUID '{ref}':[/red] {e}")
+                            _pause(console)
+                            desired = []
+                            break
+                    else:
+                        pols = client.policies_list(limit=50, offset=0, include_inactive=True, q=ref)
+                        items = list(pols.get("items") or [])
+                        if not items:
+                            console.print(f"No policies matched '{ref}'")
+                            _pause(console)
+                            desired = []
+                            break
+                        if len(items) == 1:
+                            pol = items[0]
+                        else:
+                            picks = [
+                                _Pick(label=str(p.get("name") or p.get("id") or ""), value=p)
+                                for p in items
+                            ]
+                            picked = _pick_from_table(
+                                console=console,
+                                title=f"Pick policy for entry #{i + 1} ({ref})",
+                                items=picks,
+                                columns=["name", "active", "id"],
+                                row_fn=lambda it: [
+                                    str((it.value or {}).get("name") or ""),
+                                    "yes" if (it.value or {}).get("is_active") else "no",
+                                    str((it.value or {}).get("id") or ""),
+                                ],
+                            )
+                            if not picked:
+                                desired = []
+                                break
+                            pol = picked.value
+
+                    if not pol:
+                        desired = []
+                        break
+
+                    policy_id = str(pol.get("id") or "").strip()
+                    policy_name = str(pol.get("name") or "").strip()
+
+                if not policy_id or not policy_name:
+                    console.print(f"Entry #{i + 1} could not resolve policy")
+                    _pause(console)
+                    desired = []
+                    break
+
+                mode = str(spec.get("mode") or "enforce").strip().lower()
+                if mode not in ("enforce", "audit"):
+                    mode = "enforce"
+
+                try:
+                    priority = int(spec.get("priority") if spec.get("priority") is not None else 9999)
+                except Exception:
+                    priority = 9999
+
+                desired.append(
+                    {
+                        "policy_id": policy_id,
+                        "policy_name": policy_name,
+                        "priority": int(priority),
+                        "mode": mode,
+                    }
+                )
+
+            if not desired:
+                continue
+
+            clear_first = Confirm.ask("Clear existing assignments first?", default=False)
+            merge_only = True
+            if not clear_first:
+                merge_only = Confirm.ask("Merge only (do not remove extras)?", default=True)
+
+            current_payload = client.device_assignments_list(device_id)
+            current = list(current_payload.get("assignments") or [])
+
+            def _key(a: dict[str, Any]) -> str:
+                pid = str(a.get("policy_id") or "").strip().lower()
+                return pid or str(a.get("policy_name") or "").strip().lower()
+
+            cur_by = {_key(a): a for a in current}
+            desired_keys = set()
+            rows: list[dict[str, Any]] = []
+
+            if clear_first:
+                rows = [
+                    {
+                        "action": "set",
+                        "policy_id": d.get("policy_id"),
+                        "policy_name": d.get("policy_name"),
+                        "priority": d.get("priority"),
+                        "mode": d.get("mode"),
+                        "current_priority": None,
+                        "current_mode": None,
+                    }
+                    for d in desired
+                ]
+            else:
+                for d in desired:
+                    k = _key(d)
+                    desired_keys.add(k)
+                    cur = cur_by.get(k)
+                    if cur:
+                        cp = cur.get("priority")
+                        cm = str(cur.get("mode") or "").strip().lower()
+                        if int(cp or 0) == int(d.get("priority") or 0) and cm == str(d.get("mode") or ""):
+                            action_ = "keep"
+                        else:
+                            action_ = "update"
+                        rows.append(
+                            {
+                                "action": action_,
+                                "policy_id": d.get("policy_id"),
+                                "policy_name": d.get("policy_name"),
+                                "priority": d.get("priority"),
+                                "mode": d.get("mode"),
+                                "current_priority": cur.get("priority"),
+                                "current_mode": cur.get("mode"),
+                            }
+                        )
+                    else:
+                        rows.append(
+                            {
+                                "action": "add",
+                                "policy_id": d.get("policy_id"),
+                                "policy_name": d.get("policy_name"),
+                                "priority": d.get("priority"),
+                                "mode": d.get("mode"),
+                                "current_priority": None,
+                                "current_mode": None,
+                            }
+                        )
+
+                if not merge_only:
+                    for a in current:
+                        k = _key(a)
+                        if k in desired_keys:
+                            continue
+                        rows.append(
+                            {
+                                "action": "remove",
+                                "policy_id": a.get("policy_id"),
+                                "policy_name": a.get("policy_name"),
+                                "priority": None,
+                                "mode": None,
+                                "current_priority": a.get("priority"),
+                                "current_mode": a.get("mode"),
+                            }
+                        )
+
+            console.print("[bold]Plan[/bold]")
+            if clear_first:
+                console.print(
+                    f"[yellow]Will clear[/yellow] {len(current)} existing assignments, then set {len(desired)} from file."
+                )
+            render_assignments_plan(console, rows, device_id=device_id)
+
+            if not Confirm.ask("Proceed?", default=False):
+                continue
+
+            if clear_first:
+                client.device_assignments_clear(device_id)
+
+            removed = 0
+            set_count = 0
+            for r in rows:
+                act = str(r.get("action") or "")
+                if act == "remove":
+                    pid = str(r.get("policy_id") or "")
+                    if pid:
+                        client.device_assignment_remove(device_id, pid)
+                        removed += 1
+                elif act in ("add", "update", "set"):
+                    pn = str(r.get("policy_name") or "").strip()
+                    if pn:
+                        client.assignment_set(
+                            device_id=device_id,
+                            policy_name=pn,
+                            priority=int(r.get("priority") or 0),
+                            mode=str(r.get("mode") or "enforce"),
+                        )
+                        set_count += 1
+
+            console.print(f"Applied: set={set_count} removed={removed}")
+            _pause(console)
+            continue
+
+
         if action == "clone":
             if not assignments:
                 console.print("Source device has no assignments to clone.")
@@ -389,14 +634,80 @@ def _device_assignments_menu(
 
             clear_first = Confirm.ask("Clear destination assignments first?", default=True)
 
-            console.print("[bold]Clone summary[/bold]")
+            # Build a minimal plan so we only call set for assignments that would change.
+            dst_payload = client.device_assignments_list(dst_id)
+            dst_current = list(dst_payload.get("assignments") or [])
+            dst_by_id = {str(a.get("policy_id") or "").strip().lower(): a for a in dst_current}
+
+            desired: list[dict[str, Any]] = []
+            for a in assignments:
+                pn = str(a.get("policy_name") or "").strip()
+                pid = str(a.get("policy_id") or "").strip()
+                if not pn:
+                    continue
+                m = str(a.get("mode") or "enforce").strip().lower()
+                if m not in ("enforce", "audit"):
+                    m = "enforce"
+                pri = int(a.get("priority") or 9999)
+                desired.append({"policy_id": pid, "policy_name": pn, "priority": pri, "mode": m})
+
+            rows: list[dict[str, Any]] = []
+            if clear_first:
+                rows = [
+                    {
+                        "action": "set",
+                        "policy_id": d.get("policy_id"),
+                        "policy_name": d.get("policy_name"),
+                        "priority": d.get("priority"),
+                        "mode": d.get("mode"),
+                        "current_priority": None,
+                        "current_mode": None,
+                    }
+                    for d in desired
+                ]
+            else:
+                for d in desired:
+                    pid_k = str(d.get("policy_id") or "").strip().lower()
+                    cur = dst_by_id.get(pid_k) if pid_k else None
+                    if cur:
+                        cp = cur.get("priority")
+                        cm = str(cur.get("mode") or "").strip().lower()
+                        if int(cp or 0) == int(d.get("priority") or 0) and cm == str(d.get("mode") or ""):
+                            action_ = "keep"
+                        else:
+                            action_ = "update"
+                        rows.append(
+                            {
+                                "action": action_,
+                                "policy_id": d.get("policy_id"),
+                                "policy_name": d.get("policy_name"),
+                                "priority": d.get("priority"),
+                                "mode": d.get("mode"),
+                                "current_priority": cur.get("priority"),
+                                "current_mode": cur.get("mode"),
+                            }
+                        )
+                    else:
+                        rows.append(
+                            {
+                                "action": "add",
+                                "policy_id": d.get("policy_id"),
+                                "policy_name": d.get("policy_name"),
+                                "priority": d.get("priority"),
+                                "mode": d.get("mode"),
+                                "current_priority": None,
+                                "current_mode": None,
+                            }
+                        )
+
+            console.print("[bold]Clone plan[/bold]")
             console.print(f"from {device_key} ({device_id})")
             console.print(f"to   {dst_device.get('device_key')} ({dst_id})")
-            render_assignments_list(
-                console,
-                {"device_id": dst_id, "assignments": assignments},
-                title="Assignments to apply",
-            )
+            if clear_first:
+                console.print(
+                    f"[yellow]Will clear[/yellow] {len(dst_current)} existing assignments, then set {len(desired)} from source."
+                )
+            render_assignments_plan(console, rows, device_id=dst_id)
 
             if not Confirm.ask("Proceed?", default=False):
                 continue
@@ -404,26 +715,25 @@ def _device_assignments_menu(
             if clear_first:
                 client.device_assignments_clear(dst_id)
 
-            applied = 0
-            for a in assignments:
-                pn = str(a.get("policy_name") or "").strip()
-                if not pn:
-                    continue
-                m = str(a.get("mode") or "enforce").strip().lower()
-                if m not in ("enforce", "audit"):
-                    m = "enforce"
-                pri = int(a.get("priority") or 9999)
-                client.assignment_set(
-                    device_id=dst_id,
-                    policy_name=pn,
-                    priority=int(pri),
-                    mode=m,
-                )
-                applied += 1
+            set_count = 0
+            for r in rows:
+                act = str(r.get("action") or "")
+                if act in ("add", "update", "set"):
+                    pn = str(r.get("policy_name") or "").strip()
+                    if not pn:
+                        continue
+                    client.assignment_set(
+                        device_id=dst_id,
+                        policy_name=pn,
+                        priority=int(r.get("priority") or 0),
+                        mode=str(r.get("mode") or "enforce"),
+                    )
+                    set_count += 1
 
-            console.print(f"Cloned {applied} assignments.")
+            console.print(f"Cloned: set={set_count} (kept={sum(1 for r in rows if (r.get('action')=='keep'))})")
             _pause(console)
             continue
+
 
         if action == "set":
             q = Prompt.ask("Policy search (substring)", default="").strip()

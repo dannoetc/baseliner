@@ -172,6 +172,40 @@ def render_assignments_list(
         console.print("(no assignments)")
 
 
+
+
+def render_assignments_plan(
+    console: Console,
+    rows: list[dict[str, Any]],
+    *,
+    title: str = "Assignment plan",
+    device_id: str | None = None,
+) -> None:
+    t = Table(title=f"{title} ({device_id})" if device_id else title)
+    t.add_column("action")
+    t.add_column("policy_name")
+    t.add_column("policy_id", overflow="fold")
+    t.add_column("priority", justify="right")
+    t.add_column("mode")
+    t.add_column("current_priority", justify="right")
+    t.add_column("current_mode")
+
+    for r in rows:
+        t.add_row(
+            str(r.get("action") or ""),
+            str(r.get("policy_name") or ""),
+            str(r.get("policy_id") or ""),
+            str(r.get("priority") or ""),
+            str(r.get("mode") or ""),
+            str(r.get("current_priority") or ""),
+            str(r.get("current_mode") or ""),
+        )
+
+    console.print(t)
+    if not rows:
+        console.print("(no changes)")
+
+
 def render_runs_list(console: Console, payload: dict[str, Any]) -> None:
     items = payload.get("items") or []
     t = Table(title="Runs")

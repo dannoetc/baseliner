@@ -30,6 +30,9 @@ services:
       BASELINER_TOKEN_PEPPER: change-me-to-a-long-random-string
       BASELINER_ADMIN_KEY: change-me-too
       LOG_LEVEL: INFO
+      # Server is a src-layout package (server/src/baseliner_server). Ensure it is importable
+      # even before the image is rebuilt (and in case the editable install is removed).
+      PYTHONPATH: /app/server/src
     ports:
       - "8000:8000"
     working_dir: /app/server

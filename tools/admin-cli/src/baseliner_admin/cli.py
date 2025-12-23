@@ -10,6 +10,7 @@ from rich.console import Console
 from baseliner_admin.client import BaselinerAdminClient, ClientConfig
 from baseliner_admin.render import (
     render_assignments_list,
+    render_assignments_plan,
     render_devices_list,
     render_policy_detail,
     render_policies_list,
@@ -156,6 +157,68 @@ def _resolve_policy_name(
     raise typer.Exit(code=2)
 
 
+
+def _resolve_policy_id_and_name(
+    *,
+    client: BaselinerAdminClient,
+    console: Console,
+    policy_ref: str,
+    include_inactive: bool = True,
+) -> tuple[str, str]:
+    """Resolve a policy ref to (policy_id, policy_name).
+
+    policy_ref may be:
+      - exact UUID
+      - exact policy name
+      - substring (must uniquely match)
+    """
+
+    policy_ref = policy_ref.strip()
+    u = try_parse_uuid(policy_ref)
+    if u:
+        pol = client.policies_show(str(u))
+        pid = str(pol.get("id") or "").strip()
+        name = str(pol.get("name") or "").strip()
+        if not pid or not name:
+            console.print(f"Policy {u} missing id or name")
+            raise typer.Exit(code=1)
+        return pid, name
+
+    payload = client.policies_list(
+        limit=200,
+        offset=0,
+        include_inactive=include_inactive,
+        q=policy_ref,
+    )
+    items = list(payload.get("items") or [])
+    q = policy_ref.lower()
+
+    exact = [p for p in items if str(p.get("name") or "").strip().lower() == q]
+    if len(exact) == 1:
+        pid = str(exact[0].get("id") or "").strip()
+        name = str(exact[0].get("name") or "").strip()
+        if not pid or not name:
+            console.print(f"Policy matched but missing id/name: {policy_ref}")
+            raise typer.Exit(code=1)
+        return pid, name
+
+    if len(items) == 1:
+        pid = str(items[0].get("id") or "").strip()
+        name = str(items[0].get("name") or "").strip()
+        if not pid or not name:
+            console.print(f"Policy matched but missing id/name: {policy_ref}")
+            raise typer.Exit(code=1)
+        return pid, name
+
+    if not items:
+        console.print(f"No policies matched: {policy_ref}")
+        raise typer.Exit(code=1)
+
+    console.print(f"Ambiguous policy reference: {policy_ref}")
+    render_policies_list(console, payload)
+    raise typer.Exit(code=2)
+
+
 def _resolve_assignment_policy(
     *,
     console: Console,
@@ -222,6 +285,178 @@ def _normalize_mode(v: str | None) -> str | None:
     if s not in ("enforce", "audit"):
         raise typer.BadParameter("--mode must be 'enforce' or 'audit'")
     return s
+
+
+
+def _assignment_key(a: dict[str, Any]) -> str:
+    pid = str(a.get("policy_id") or "").strip().lower()
+    if pid:
+        return f"id:{pid}"
+    name = str(a.get("policy_name") or "").strip().lower()
+    return f"name:{name}"
+
+
+def _load_assignments_file(path: Path) -> list[dict[str, Any]]:
+    """Load an assignments JSON file.
+
+    Supported formats:
+      1) A JSON list of assignment objects
+      2) A JSON object with an 'assignments' list
+
+    Each assignment object should contain:
+      - policy (policy name/uuid/substr) OR policy_id OR policy_name
+      - priority (int)
+      - mode (enforce|audit)
+    """
+
+    obj = read_json_file(path)
+    if isinstance(obj, dict) and "assignments" in obj:
+        obj = obj.get("assignments")
+
+    if not isinstance(obj, list):
+        raise typer.BadParameter(
+            "Assignments file must be a JSON list, or an object with an 'assignments' list"
+        )
+
+    out: list[dict[str, Any]] = []
+    for idx, item in enumerate(obj, start=1):
+        if not isinstance(item, dict):
+            raise typer.BadParameter(f"Assignment entry #{idx} must be an object")
+        out.append(item)
+
+    return out
+
+
+def _normalize_assignment_spec(
+    *,
+    client: BaselinerAdminClient,
+    console: Console,
+    spec: dict[str, Any],
+) -> dict[str, Any]:
+    policy_ref = spec.get("policy") or spec.get("policy_ref")
+    policy_id = spec.get("policy_id")
+    policy_name = spec.get("policy_name")
+
+    if policy_id and policy_name:
+        pid = str(policy_id).strip()
+        name = str(policy_name).strip()
+        if not pid or not name:
+            raise typer.BadParameter("policy_id/policy_name must not be empty")
+    else:
+        ref = str(policy_ref or policy_id or policy_name or "").strip()
+        if not ref:
+            raise typer.BadParameter("Each assignment must include policy/policy_id/policy_name")
+        pid, name = _resolve_policy_id_and_name(client=client, console=console, policy_ref=ref)
+
+    prio_raw = spec.get("priority")
+    try:
+        priority = int(prio_raw) if prio_raw is not None else 100
+    except Exception:
+        raise typer.BadParameter(f"Invalid priority: {prio_raw}")
+
+    mode = _normalize_mode(str(spec.get("mode") or "enforce")) or "enforce"
+
+    return {
+        "policy_id": pid,
+        "policy_name": name,
+        "priority": priority,
+        "mode": mode,
+    }
+
+
+def _plan_assignment_changes(
+    *,
+    current: list[dict[str, Any]],
+    desired: list[dict[str, Any]],
+    merge: bool,
+) -> list[dict[str, Any]]:
+    current_by_key = {_assignment_key(a): a for a in current}
+
+    desired_keys: set[str] = set()
+    rows: list[dict[str, Any]] = []
+
+    for d in desired:
+        k = _assignment_key(d)
+        desired_keys.add(k)
+
+        cur = current_by_key.get(k)
+        desired_prio = int(d.get("priority") or 0)
+        desired_mode = str(d.get("mode") or "").strip().lower()
+
+        if cur:
+            cur_prio_raw = cur.get("priority")
+            try:
+                cur_prio = int(cur_prio_raw) if cur_prio_raw is not None else 0
+            except Exception:
+                cur_prio = 0
+            cur_mode = str(cur.get("mode") or "").strip().lower()
+
+            action = "keep"
+            if cur_prio != desired_prio or cur_mode != desired_mode:
+                action = "update"
+
+            rows.append(
+                {
+                    "action": action,
+                    "policy_id": d.get("policy_id") or cur.get("policy_id"),
+                    "policy_name": d.get("policy_name") or cur.get("policy_name"),
+                    "priority": desired_prio,
+                    "mode": desired_mode,
+                    "current_priority": cur_prio,
+                    "current_mode": cur_mode,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "action": "add",
+                    "policy_id": d.get("policy_id"),
+                    "policy_name": d.get("policy_name"),
+                    "priority": desired_prio,
+                    "mode": desired_mode,
+                    "current_priority": None,
+                    "current_mode": None,
+                }
+            )
+
+    if not merge:
+        for cur in current:
+            k = _assignment_key(cur)
+            if k in desired_keys:
+                continue
+            rows.append(
+                {
+                    "action": "remove",
+                    "policy_id": cur.get("policy_id"),
+                    "policy_name": cur.get("policy_name"),
+                    "priority": None,
+                    "mode": None,
+                    "current_priority": cur.get("priority"),
+                    "current_mode": cur.get("mode"),
+                }
+            )
+
+    order = {"remove": 0, "update": 1, "add": 2, "keep": 3}
+    rows.sort(
+        key=lambda r: (
+            int(order.get(str(r.get("action") or ""), 9)),
+            str(r.get("policy_name") or ""),
+        )
+    )
+
+    return rows
+
+
+def _plan_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    out = {"add": 0, "update": 0, "remove": 0, "keep": 0}
+    for r in rows:
+        a = str(r.get("action") or "")
+        if a == "set":
+            out["add"] += 1
+            continue
+        if a in out:
+            out[a] += 1
+    return out
 
 
 @app.command("tui", help="EXPERIMENTAL: prompt-driven operator console")
@@ -634,6 +869,137 @@ def assignments_update(
     console.print_json(data=payload)
 
 
+@assignments_app.command("apply")
+def assignments_apply(
+    ctx: typer.Context,
+    device_ref: str = typer.Argument(..., help="device UUID or substring match on device_key/hostname"),
+    file: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="JSON assignments file"),
+    merge: bool = typer.Option(
+        False,
+        "--merge",
+        help="Only add/update desired assignments; do not remove existing extra assignments",
+    ),
+    clear_first: bool = typer.Option(
+        False,
+        "--clear-first",
+        help="Clear all existing assignments before applying the file",
+    ),
+    plan: bool = typer.Option(False, "--plan", help="Show the plan and exit (no changes)"),
+    yes: bool = typer.Option(False, "--yes", help="Do not prompt for confirmation"),
+) -> None:
+    c = _client(ctx)
+    console = _console()
+
+    device_id = _resolve_device_id(
+        client=c, console=console, device_ref=device_ref, include_deleted=True
+    )
+
+    specs = _load_assignments_file(file)
+    desired = [
+        _normalize_assignment_spec(client=c, console=console, spec=s)
+        for s in specs
+    ]
+
+    current_payload = c.device_assignments_list(device_id)
+    current = list(current_payload.get("assignments") or [])
+
+    if clear_first:
+        rows = [
+            {
+                "action": "set",
+                "policy_id": d.get("policy_id"),
+                "policy_name": d.get("policy_name"),
+                "priority": d.get("priority"),
+                "mode": d.get("mode"),
+                "current_priority": None,
+                "current_mode": None,
+            }
+            for d in desired
+        ]
+    else:
+        rows = _plan_assignment_changes(current=current, desired=desired, merge=bool(merge))
+
+    counts = _plan_counts(rows)
+
+    if ctx.obj.get("json"):
+        print(
+            c.pretty_json(
+                {
+                    "device_id": device_id,
+                    "clear_first": bool(clear_first),
+                    "merge": bool(merge),
+                    "file": str(file),
+                    "plan": rows,
+                    "counts": counts,
+                    "dry_run": bool(plan),
+                }
+            )
+        )
+        if plan:
+            return
+
+    if not ctx.obj.get("json"):
+        console.print(f"Device: {device_id}")
+        if clear_first:
+            console.print(
+                f"[yellow]Will clear[/yellow] {len(current)} existing assignments, then set {len(desired)} from file."
+            )
+        render_assignments_plan(console, rows, device_id=device_id)
+        console.print(
+            f"add={counts['add']} update={counts['update']} remove={counts['remove']} keep={counts['keep']}"
+        )
+
+    if plan:
+        return
+
+    if clear_first and merge:
+        raise typer.BadParameter("--clear-first and --merge are mutually exclusive")
+
+    if not yes:
+        msg = "Apply these changes?"
+        if counts.get("remove"):
+            msg = f"Apply these changes? (includes {counts['remove']} removals)"
+        if not typer.confirm(msg, default=False):
+            raise typer.Exit(code=0)
+
+    if clear_first:
+        c.device_assignments_clear(device_id)
+        for d in desired:
+            c.assignment_set(
+                device_id=device_id,
+                policy_name=str(d.get("policy_name")),
+                priority=int(d.get("priority") or 0),
+                mode=str(d.get("mode") or "enforce"),
+            )
+    else:
+        for r in rows:
+            a = str(r.get("action") or "")
+            if a == "remove":
+                c.device_assignment_remove(device_id, str(r.get("policy_id")))
+            elif a in ("add", "update"):
+                c.assignment_set(
+                    device_id=device_id,
+                    policy_name=str(r.get("policy_name")),
+                    priority=int(r.get("priority") or 0),
+                    mode=str(r.get("mode") or "enforce"),
+                )
+
+    if ctx.obj.get("json"):
+        print(
+            c.pretty_json(
+                {
+                    "ok": True,
+                    "device_id": device_id,
+                    "applied": True,
+                    "counts": counts,
+                }
+            )
+        )
+        return
+
+    console.print("[green]OK[/green]")
+
+
 @assignments_app.command("remove")
 def assignments_remove(
     ctx: typer.Context,
@@ -704,7 +1070,15 @@ def assignments_clone(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen without changing anything"),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
 ) -> None:
-    """Clone policy assignments from one device to another."""
+    """Clone policy assignments from one device to another.
+
+    Behavior:
+      - --clear-first: replace destination assignments with source assignments
+      - --merge: add/update source assignments on destination, leaving extras untouched
+
+    In merge mode, this command is drift-aware: it only calls the server for
+    assignments that would change (add/update), and shows a plan with actions.
+    """
 
     c = _client(ctx)
     console = _console()
@@ -733,7 +1107,7 @@ def assignments_clone(
         console.print(f"Source device {src_id} has no assignments.")
         raise typer.Exit(code=1)
 
-    plan_items: list[dict[str, Any]] = []
+    desired: list[dict[str, Any]] = []
     for a in src_items:
         pn = str(a.get("policy_name") or "").strip()
         if not pn:
@@ -746,7 +1120,7 @@ def assignments_clone(
             m = _normalize_mode(m_raw) or "enforce"
         except typer.BadParameter:
             m = "enforce"
-        plan_items.append(
+        desired.append(
             {
                 "policy_name": pn,
                 "policy_id": a.get("policy_id"),
@@ -756,16 +1130,65 @@ def assignments_clone(
             }
         )
 
-    console.print("[bold]Clone plan[/bold]")
-    console.print(f"source={src_id}")
-    console.print(f"dest={dst_id}")
-    render_assignments_list(
-        console,
-        {"device_id": dst_id, "assignments": plan_items},
-        title="Assignments to apply",
-    )
+    current_payload = c.device_assignments_list(dst_id)
+    current = list(current_payload.get("assignments") or [])
+
+    if clear_first:
+        rows = [
+            {
+                "action": "set",
+                "policy_id": d.get("policy_id"),
+                "policy_name": d.get("policy_name"),
+                "priority": d.get("priority"),
+                "mode": d.get("mode"),
+                "current_priority": None,
+                "current_mode": None,
+            }
+            for d in desired
+        ]
+    else:
+        # merge behavior (do not remove extras)
+        rows = _plan_assignment_changes(current=current, desired=desired, merge=True)
+
+    counts = _plan_counts(rows)
+
+    if ctx.obj.get("json"):
+        print(
+            c.pretty_json(
+                {
+                    "source_device_id": src_id,
+                    "dest_device_id": dst_id,
+                    "clear_first": bool(clear_first),
+                    "priority_offset": int(priority_offset),
+                    "mode_override": mode_override,
+                    "plan": rows,
+                    "counts": counts,
+                    "dry_run": bool(dry_run),
+                }
+            )
+        )
+        if dry_run:
+            return
+
+    if not ctx.obj.get("json"):
+        console.print("[bold]Clone plan[/bold]")
+        console.print(f"source={src_id}")
+        console.print(f"dest={dst_id}")
+        if clear_first:
+            console.print(
+                f"[yellow]Will clear[/yellow] {len(current)} existing assignments, then set {len(desired)} from source."
+            )
+        render_assignments_plan(console, rows, device_id=dst_id)
+        console.print(
+            f"add={counts['add']} update={counts['update']} remove={counts['remove']} keep={counts['keep']}"
+        )
 
     if dry_run:
+        return
+
+    # No-op fast path.
+    if not clear_first and (counts.get("add", 0) + counts.get("update", 0)) == 0:
+        console.print("No changes needed.")
         return
 
     if not yes:
@@ -777,18 +1200,27 @@ def assignments_clone(
 
     if clear_first:
         c.device_assignments_clear(dst_id)
+        for d in desired:
+            c.assignment_set(
+                device_id=dst_id,
+                policy_name=str(d["policy_name"]),
+                priority=int(d["priority"]),
+                mode=str(d["mode"]),
+            )
+    else:
+        for r in rows:
+            a = str(r.get("action") or "")
+            if a not in ("add", "update"):
+                continue
+            c.assignment_set(
+                device_id=dst_id,
+                policy_name=str(r.get("policy_name")),
+                priority=int(r.get("priority") or 0),
+                mode=str(r.get("mode") or "enforce"),
+            )
 
-    applied = 0
-    for it in plan_items:
-        c.assignment_set(
-            device_id=dst_id,
-            policy_name=str(it["policy_name"]),
-            priority=int(it["priority"]),
-            mode=str(it["mode"]),
-        )
-        applied += 1
+    console.print(f"Applied assignments to {dst_id}.")
 
-    console.print(f"Applied {applied} assignments to {dst_id}.")
 
 
 @assignments_app.command("clear")
