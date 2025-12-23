@@ -9,7 +9,7 @@ WORKDIR /app/server
 
 # Minimal OS deps
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates \
+    && apt-get install -y --no-install-recommends bash git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy server source

@@ -24,7 +24,6 @@ from baseliner_server.db.models import (
     PolicyAssignment,
     Run,
     RunItem,
-    RunKind,
 )
 from baseliner_server.schemas.admin import (
     AssignPolicyRequest,
@@ -51,7 +50,13 @@ from baseliner_server.schemas.audit import AuditEvent, AuditListResponse
 from baseliner_server.schemas.device_runs import DeviceRunsResponse, RunRollup
 from baseliner_server.schemas.maintenance import PruneCounts, PruneRequest, PruneResponse
 from baseliner_server.schemas.policy import EffectivePolicyResponse
-from baseliner_server.schemas.policy_admin import UpsertPolicyRequest, UpsertPolicyResponse
+from baseliner_server.schemas.policy_admin import (
+    PoliciesListResponse,
+    PolicyDetailResponse,
+    PolicySummary,
+    UpsertPolicyRequest,
+    UpsertPolicyResponse,
+)
 from baseliner_server.schemas.run_detail import LogEventDetail, RunDetailResponse, RunItemDetail
 from baseliner_server.services.audit import emit_admin_audit
 from baseliner_server.services.policy_compiler import compile_effective_policy
@@ -730,6 +735,91 @@ def list_device_runs(
     )
 
 
+
+
+
+@router.get(
+    "/admin/policies",
+    response_model=PoliciesListResponse,
+    dependencies=[Depends(require_admin)],
+)
+def list_policies(
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    include_inactive: bool = Query(
+        False,
+        description="If true, include inactive policies in the list.",
+    ),
+    q: str | None = Query(
+        None,
+        description="Substring search on policy name/description (case-insensitive).",
+    ),
+) -> PoliciesListResponse:
+    stmt = select(Policy)
+
+    if not include_inactive:
+        stmt = stmt.where(Policy.is_active.is_(True))
+
+    qv = (q or "").strip()
+    if qv:
+        like = f"%{qv}%"
+        stmt = stmt.where(or_(Policy.name.ilike(like), Policy.description.ilike(like)))
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+
+    rows = list(
+        db.scalars(
+            stmt.order_by(desc(Policy.updated_at), desc(Policy.created_at), desc(Policy.id))
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+
+    return PoliciesListResponse(
+        items=[
+            PolicySummary(
+                id=str(p.id),
+                name=p.name,
+                description=p.description,
+                schema_version=p.schema_version,
+                is_active=bool(p.is_active),
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+            )
+            for p in rows
+        ],
+        limit=int(limit),
+        offset=int(offset),
+        total=int(total),
+    )
+
+
+@router.get(
+    "/admin/policies/{policy_id}",
+    response_model=PolicyDetailResponse,
+    dependencies=[Depends(require_admin)],
+)
+def get_policy(
+    policy_id: uuid.UUID = Path(..., description="Policy UUID"),
+    db: Session = Depends(get_db),
+) -> PolicyDetailResponse:
+    policy = db.scalar(select(Policy).where(Policy.id == policy_id))
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+
+    return PolicyDetailResponse(
+        id=str(policy.id),
+        name=policy.name,
+        description=policy.description,
+        schema_version=policy.schema_version,
+        is_active=bool(policy.is_active),
+        created_at=policy.created_at,
+        updated_at=policy.updated_at,
+        document=policy.document or {},
+    )
+
+
 @router.post(
     "/admin/policies",
     response_model=UpsertPolicyResponse,
@@ -903,10 +993,9 @@ def list_devices(
 ) -> DevicesListResponse:
     from baseliner_server.schemas.admin_list import DeviceHealth, RunSummaryLite
 
-    runs_ranked_any = (
+    runs_ranked = (
         select(
             Run.id.label("run_id"),
-            Run.kind.label("run_kind"),
             Run.device_id.label("device_id"),
             Run.started_at.label("started_at"),
             Run.ended_at.label("ended_at"),
@@ -916,49 +1005,18 @@ def list_devices(
             Run.effective_policy_hash.label("effective_policy_hash"),
             Run.summary.label("summary"),
             func.row_number()
-            .over(
-                partition_by=Run.device_id,
-                order_by=(Run.started_at.desc(), Run.id.desc()),
-            )
+            .over(partition_by=Run.device_id, order_by=(Run.started_at.desc(), Run.id.desc()))
             .label("rn"),
         )
     ).subquery()
 
-    runs_ranked_apply = (
-        select(
-            Run.id.label("apply_run_id"),
-            Run.kind.label("apply_run_kind"),
-            Run.device_id.label("apply_device_id"),
-            Run.started_at.label("apply_started_at"),
-            Run.ended_at.label("apply_ended_at"),
-            Run.status.label("apply_status"),
-            Run.agent_version.label("apply_agent_version"),
-            Run.correlation_id.label("apply_correlation_id"),
-            Run.effective_policy_hash.label("apply_effective_policy_hash"),
-            Run.summary.label("apply_summary"),
-            func.row_number()
-            .over(
-                partition_by=Run.device_id,
-                order_by=(Run.started_at.desc(), Run.id.desc()),
-            )
-            .label("rn"),
-        )
-        .where(Run.kind == RunKind.apply)
-    ).subquery()
-
-    stmt = select(Device, runs_ranked_any, runs_ranked_apply)
+    stmt = select(Device, runs_ranked)
     if not include_deleted:
         stmt = stmt.where(Device.status == DeviceStatus.active)
 
     stmt = (
         stmt.outerjoin(
-            runs_ranked_any,
-            (runs_ranked_any.c.device_id == Device.id) & (runs_ranked_any.c.rn == 1),
-        )
-        .outerjoin(
-            runs_ranked_apply,
-            (runs_ranked_apply.c.apply_device_id == Device.id)
-            & (runs_ranked_apply.c.rn == 1),
+            runs_ranked, (runs_ranked.c.device_id == Device.id) & (runs_ranked.c.rn == 1)
         )
         .order_by(desc(Device.last_seen_at), desc(Device.enrolled_at))
         .offset(offset)
@@ -986,9 +1044,8 @@ def list_devices(
     items_out: list[DeviceSummary] = []
     for row in rows:
         d: Device = row[0]
-        m = row._mapping
+        m = row._mapping  # labeled columns from runs_ranked live here
 
-        # Latest run (apply or heartbeat).
         run_id = m.get("run_id")
         last_run_at: datetime | None = None
         last_run_status: str | None = None
@@ -1002,7 +1059,6 @@ def list_devices(
 
             last_run_obj = RunSummaryLite(
                 id=str(run_id),
-                kind=_status(m.get("run_kind")),
                 correlation_id=m.get("correlation_id"),
                 started_at=started_at,
                 ended_at=ended_at,
@@ -1012,50 +1068,24 @@ def list_devices(
                 summary=(m.get("summary") or {}),
             )
 
-        # Latest *apply* run (compliance), ignoring heartbeat runs.
-        apply_run_id = m.get("apply_run_id")
-        last_apply_run_at: datetime | None = None
-        last_apply_run_status: str | None = None
-        last_apply_run_obj: RunSummaryLite | None = None
-
-        if apply_run_id is not None:
-            last_apply_run_status = _status(m.get("apply_status"))
-            started_at = m.get("apply_started_at")
-            ended_at = m.get("apply_ended_at")
-            last_apply_run_at = ended_at or started_at
-
-            last_apply_run_obj = RunSummaryLite(
-                id=str(apply_run_id),
-                kind=_status(m.get("apply_run_kind")),
-                correlation_id=m.get("apply_correlation_id"),
-                started_at=started_at,
-                ended_at=ended_at,
-                status=last_apply_run_status,
-                agent_version=m.get("apply_agent_version"),
-                effective_policy_hash=m.get("apply_effective_policy_hash"),
-                summary=(m.get("apply_summary") or {}),
-            )
-
         health_obj: DeviceHealth | None = None
+
+        # Provide basic health insight even when include_health=False so clients
+        # consistently receive last_run + health metadata.
         if include_health or last_run_at is not None or d.last_seen_at is not None:
             seen_age_s = _age_seconds(d.last_seen_at)
             run_age_s = _age_seconds(last_run_at)
-            apply_run_age_s = _age_seconds(last_apply_run_at)
 
             offline = (seen_age_s is None) or (seen_age_s > int(offline_after_seconds))
-            stale = (apply_run_age_s is None) or (
-                apply_run_age_s > int(stale_after_seconds)
-            )
-            last_apply_failed = bool(
-                last_apply_run_status and last_apply_run_status.lower() != "succeeded"
-            )
+            stale = (run_age_s is None) or (run_age_s > int(stale_after_seconds))
+            last_run_failed = bool(last_run_status and last_run_status.lower() != "succeeded")
 
             if offline:
                 health_status = "offline"
                 reason = "device has not checked in recently"
-            elif last_apply_failed:
+            elif last_run_failed:
                 health_status = "warn"
-                reason = "latest apply run failed"
+                reason = "latest run failed"
             elif stale:
                 health_status = "warn"
                 reason = "stale"
@@ -1069,11 +1099,8 @@ def list_devices(
                 last_seen_at=d.last_seen_at,
                 last_run_at=last_run_at,
                 last_run_status=last_run_status,
-                last_apply_run_at=last_apply_run_at,
-                last_apply_run_status=last_apply_run_status,
                 seen_age_seconds=seen_age_s,
                 run_age_seconds=run_age_s,
-                apply_run_age_seconds=apply_run_age_s,
                 stale=bool(stale),
                 offline=bool(offline),
                 reason=reason,
@@ -1096,7 +1123,6 @@ def list_devices(
                 last_seen_at=d.last_seen_at,
                 tags=d.tags or {},
                 last_run=last_run_obj,
-                last_apply_run=last_apply_run_obj,
                 health=health_obj,
             )
         )
