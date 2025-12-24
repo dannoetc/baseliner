@@ -72,15 +72,29 @@ router = APIRouter(tags=["admin"])
 
 
 def utcnow() -> datetime:
-    # Return a timezone-naive UTC datetime.
-    # (SQLite + tests are using naive datetimes, so keep it consistent.)
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Return a timezone-aware UTC datetime.
+
+    The database stores timezone-aware values for enroll token timestamps, so
+    using aware datetimes here avoids mixed comparisons.
+    """
+
+    return datetime.now(timezone.utc)
+
+
+def _normalize_to_utc(dt: datetime | None) -> datetime | None:
+    """Ensure datetimes are timezone-aware in UTC for safe comparisons."""
+
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _compute_enroll_token_expires_at(payload: CreateEnrollTokenRequest) -> datetime | None:
     # expires_at wins if explicitly provided.
     if payload.expires_at is not None:
-        return payload.expires_at
+        return _normalize_to_utc(payload.expires_at)
     if payload.ttl_seconds is None:
         return None
     try:
@@ -198,13 +212,14 @@ def list_enroll_tokens(
     now = utcnow()
     items: list[EnrollTokenSummary] = []
     for t in rows:
+        expires_at = _normalize_to_utc(t.expires_at)
         is_used = t.used_at is not None
-        is_expired = t.expires_at is not None and t.expires_at <= now
+        is_expired = expires_at is not None and expires_at <= now
         items.append(
             EnrollTokenSummary(
                 id=str(t.id),
                 created_at=t.created_at,
-                expires_at=t.expires_at,
+                expires_at=expires_at,
                 used_at=t.used_at,
                 used_by_device_id=str(t.used_by_device_id) if t.used_by_device_id else None,
                 note=t.note,
