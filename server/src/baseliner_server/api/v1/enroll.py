@@ -1,12 +1,12 @@
 import secrets
-import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from baseliner_server.api.deps import get_scoped_session, hash_token
-from baseliner_server.core.tenancy import DEFAULT_TENANT_ID, TenantScopedSession
+from baseliner_server.api.deps import get_db, hash_token
+from baseliner_server.core.tenancy import DEFAULT_TENANT_ID, TenantContext, TenantScopedSession
 from baseliner_server.db.models import Device, DeviceAuthToken, DeviceStatus, EnrollToken
 from baseliner_server.schemas.enroll import EnrollRequest, EnrollResponse
 from baseliner_server.services.device_tokens import rotate_device_token
@@ -41,7 +41,9 @@ def _select_enroll_token_for_update(token_hash: str):
 
 
 @router.post("/enroll", response_model=EnrollResponse)
-def enroll(payload: EnrollRequest, db: TenantScopedSession = Depends(get_scoped_session)) -> EnrollResponse:
+def enroll(
+    request: Request, payload: EnrollRequest, db: Session = Depends(get_db)
+) -> EnrollResponse:
     token_hash = hash_token(payload.enroll_token)
     enroll_token = db.scalar(_select_enroll_token_for_update(token_hash))
 
@@ -49,6 +51,10 @@ def enroll(payload: EnrollRequest, db: TenantScopedSession = Depends(get_scoped_
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid enroll token")
 
     tenant_id = getattr(enroll_token, "tenant_id", None) or DEFAULT_TENANT_ID
+    tenant_ctx = TenantContext(id=tenant_id, admin_scope="tenant_admin")
+    scoped_db = TenantScopedSession(db=db, tenant=tenant_ctx)
+    request.state.tenant_context = tenant_ctx
+    request.state.scoped_session = scoped_db
 
     if enroll_token.used_at is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Enroll token already used")
@@ -57,7 +63,7 @@ def enroll(payload: EnrollRequest, db: TenantScopedSession = Depends(get_scoped_
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Enroll token expired")
 
     # Create or update device
-    device = db.scalar(select(Device).where(Device.device_key == payload.device_key))
+    device = scoped_db.scalar(select(Device).where(Device.device_key == payload.device_key))
 
     if device is not None and getattr(device, "tenant_id", None) != tenant_id:
         raise HTTPException(
@@ -90,11 +96,11 @@ def enroll(payload: EnrollRequest, db: TenantScopedSession = Depends(get_scoped_
             last_seen_at=now,
             auth_token_hash=device_token_hash,
         )
-        db.add(device)
-        db.flush()  # get device.id
+        scoped_db.add(device)
+        scoped_db.flush()  # get device.id
 
         # History row for the minted token.
-        db.add(
+        scoped_db.add(
             DeviceAuthToken(
                 tenant_id=tenant_id,
                 device_id=device.id,
@@ -114,7 +120,7 @@ def enroll(payload: EnrollRequest, db: TenantScopedSession = Depends(get_scoped_
         device.tags = payload.tags or device.tags
 
         device_token, _ = rotate_device_token(
-            db=db,
+            db=scoped_db,
             device=device,
             now=now,
             reason="re-enroll",
@@ -123,13 +129,13 @@ def enroll(payload: EnrollRequest, db: TenantScopedSession = Depends(get_scoped_
         )
 
         device.last_seen_at = now
-        db.add(device)
+        scoped_db.add(device)
 
     # Mark token used.
     enroll_token.used_at = now
     enroll_token.used_by_device_id = device.id
-    db.add(enroll_token)
+    scoped_db.add(enroll_token)
 
-    db.commit()
+    scoped_db.commit()
 
     return EnrollResponse(device_id=str(device.id), device_token=device_token)
