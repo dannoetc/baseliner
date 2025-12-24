@@ -103,7 +103,7 @@ def _post_empty_report(client: TestClient, token: str):
     )
 
 
-def test_soft_delete_revokes_and_blocks_device_token(client, db):
+def test_soft_delete_revokes_and_blocks_device_token(client, db, admin_headers):
     token = "tok-delete"
     dev = _create_device(db, device_key="DEL1", token=token)
     pol = _create_policy(db, name="pol1")
@@ -111,7 +111,7 @@ def test_soft_delete_revokes_and_blocks_device_token(client, db):
     db.commit()
 
     delete_path = _admin_delete_device_path(client).replace("{device_id}", str(dev.id))
-    r = client.delete(f"{delete_path}?reason=testing")
+    r = client.delete(f"{delete_path}?reason=testing", headers=admin_headers)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["device_id"] == str(dev.id)
@@ -132,16 +132,16 @@ def test_soft_delete_revokes_and_blocks_device_token(client, db):
     assert d2.revoked_auth_token_hash is not None
 
 
-def test_soft_delete_idempotent_does_not_break_revoked_token_mapping(client, db):
+def test_soft_delete_idempotent_does_not_break_revoked_token_mapping(client, db, admin_headers):
     token = "tok-idem"
     dev = _create_device(db, device_key="DEL2", token=token)
     db.commit()
 
     delete_path = _admin_delete_device_path(client).replace("{device_id}", str(dev.id))
-    r1 = client.delete(delete_path)
+    r1 = client.delete(delete_path, headers=admin_headers)
     assert r1.status_code == 200, r1.text
 
-    r2 = client.delete(delete_path)
+    r2 = client.delete(delete_path, headers=admin_headers)
     assert r2.status_code == 200, r2.text
 
     # Still a clear 403, meaning the revoked hash mapping was preserved.
@@ -149,23 +149,25 @@ def test_soft_delete_idempotent_does_not_break_revoked_token_mapping(client, db)
     assert rr.status_code == 403, rr.text
 
 
-def test_list_devices_excludes_deleted_by_default(client, db):
+def test_list_devices_excludes_deleted_by_default(client, db, admin_headers):
     _create_device(db, device_key="ACTIVE1", token="a1")
     dev_b = _create_device(db, device_key="ACTIVE2", token="a2")
     db.commit()
 
     delete_path = _admin_delete_device_path(client).replace("{device_id}", str(dev_b.id))
-    rdel = client.delete(delete_path)
+    rdel = client.delete(delete_path, headers=admin_headers)
     assert rdel.status_code == 200, rdel.text
 
     list_path = _admin_list_devices_path(client)
-    r = client.get(f"{list_path}?include_health=false")
+    r = client.get(f"{list_path}?include_health=false", headers=admin_headers)
     assert r.status_code == 200, r.text
     keys = [x["device_key"] for x in r.json()["items"]]
     assert "ACTIVE1" in keys
     assert "ACTIVE2" not in keys
 
-    r2 = client.get(f"{list_path}?include_health=false&include_deleted=true")
+    r2 = client.get(
+        f"{list_path}?include_health=false&include_deleted=true", headers=admin_headers
+    )
     assert r2.status_code == 200, r2.text
     keys2 = [x["device_key"] for x in r2.json()["items"]]
     assert "ACTIVE2" in keys2

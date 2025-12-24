@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable
 
+from fastapi import Request
+
 from sqlalchemy import and_, select
 from sqlalchemy.sql import Select
 
@@ -42,9 +44,22 @@ class TenantContext:
         return self.admin_scope == "superadmin"
 
 
-def get_tenant_context() -> TenantContext:
-    # FastAPI dependency (no args): returns the current tenant context.
-    # Phase 0: single-tenant default with superadmin-scoped admin key.
+def get_tenant_context(request: Request = None) -> TenantContext:
+    # FastAPI dependency: returns the current tenant context.
+    # Set by upstream auth/tenancy dependencies; defaults to the legacy single-tenant value.
+    ctx = getattr(getattr(request, "state", None), "tenant_context", None) if request else None
+    if isinstance(ctx, TenantContext):
+        return ctx
+    if request is not None:
+        raw_tenant = request.headers.get("X-Tenant-ID")
+        if raw_tenant:
+            try:
+                header_tenant = uuid.UUID(str(raw_tenant))
+                ctx = TenantContext(id=header_tenant, admin_scope="superadmin")
+                request.state.tenant_context = ctx
+                return ctx
+            except Exception:
+                pass
     return TenantContext(id=DEFAULT_TENANT_ID, admin_scope="superadmin")
 
 

@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from baseliner_server.api.deps import hash_token
+from baseliner_server.api.deps import hash_admin_key, hash_token
+from baseliner_server.core.config import settings
 from baseliner_server.db.models import Device, DeviceStatus
 
 
@@ -45,7 +46,7 @@ def test_audit_logs_enroll_token_create(client: TestClient):
     ev = body["items"][0]
     assert ev["action"] == "enroll_token.create"
     assert ev["actor_type"] == "admin_key"
-    assert ev["actor_id"] == "test-admin"
+    assert ev["actor_id"] == hash_admin_key(settings.baseliner_admin_key)
     assert ev["target_type"] == "enroll_token"
     assert ev["target_id"]
 

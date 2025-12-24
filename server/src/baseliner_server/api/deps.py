@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import uuid
 from datetime import datetime, timezone
 from typing import Generator, Optional
 
@@ -15,7 +16,7 @@ from baseliner_server.core.tenancy import (
     ensure_default_tenant,
     get_tenant_context,
 )
-from baseliner_server.db.models import Device, DeviceAuthToken, DeviceStatus
+from baseliner_server.db.models import AdminKey, Device, DeviceAuthToken, DeviceStatus, Tenant
 from baseliner_server.db.session import SessionLocal
 
 
@@ -58,10 +59,64 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _parse_tenant_id(raw: Optional[str]) -> uuid.UUID:
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-Tenant-ID header")
+    try:
+        return uuid.UUID(str(raw))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid tenant id")
+
+
+def _require_tenant(db: Session, tenant_id: uuid.UUID) -> uuid.UUID:
+    if db.get(Tenant, tenant_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return tenant_id
+
+
 def get_scoped_session(
-    tenant: TenantContext = Depends(get_tenant_context), db: Session = Depends(get_db)
+    request: Request,
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    tenant_ctx_override: TenantContext = Depends(get_tenant_context),
 ) -> TenantScopedSession:
-    return TenantScopedSession(db=db, tenant=tenant)
+    existing = getattr(getattr(request, "state", None), "scoped_session", None)
+    if isinstance(existing, TenantScopedSession):
+        return existing
+
+    tenant_ctx = tenant_ctx_override or getattr(getattr(request, "state", None), "tenant_context", None)
+    tenant_id: uuid.UUID | None = getattr(tenant_ctx, "id", None)
+
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        token_h = hash_token(token)
+        tok = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == token_h))
+        if tok is not None:
+            tenant_id = getattr(tok, "tenant_id", None)
+        else:
+            dev = db.scalar(
+                select(Device).where(
+                    or_(
+                        Device.auth_token_hash == token_h,
+                        Device.revoked_auth_token_hash == token_h,
+                    )
+                )
+            )
+            if dev is not None:
+                tenant_id = getattr(dev, "tenant_id", None) or DEFAULT_TENANT_ID
+
+    if tenant_id is None and x_tenant_id:
+        tenant_id = _require_tenant(db, _parse_tenant_id(x_tenant_id))
+
+    tenant_id = tenant_id or DEFAULT_TENANT_ID
+    scope = getattr(tenant_ctx, "admin_scope", "superadmin")
+    tenant_ctx = TenantContext(id=tenant_id, admin_scope=scope)
+    request.state.tenant_context = tenant_ctx
+
+    scoped = TenantScopedSession(db=db, tenant=tenant_ctx)
+    request.state.scoped_session = scoped
+    return scoped
 
 
 def get_bearer_token(authorization: Optional[str] = Header(default=None)) -> str:
@@ -70,17 +125,38 @@ def get_bearer_token(authorization: Optional[str] = Header(default=None)) -> str
     return authorization.split(" ", 1)[1].strip()
 
 
-def require_admin(x_admin_key: Optional[str] = Header(default=None)) -> None:
-    if not x_admin_key or not hmac.compare_digest(x_admin_key, settings.baseliner_admin_key):
+def get_admin_key(
+    request: Request,
+    x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+) -> AdminKey:
+    if not x_admin_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
 
+    tenant_id = _require_tenant(db, _parse_tenant_id(x_tenant_id))
+    key_hash = hash_admin_key(x_admin_key)
+    admin_key = db.scalar(
+        select(AdminKey).where(AdminKey.tenant_id == tenant_id, AdminKey.key_hash == key_hash)
+    )
+    if admin_key is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
 
-def require_admin_actor(x_admin_key: Optional[str] = Header(default=None)) -> str:
+    scope_val = getattr(admin_key, "scope", "tenant_admin")
+    scope = scope_val.value if hasattr(scope_val, "value") else str(scope_val)
+    ctx = TenantContext(id=tenant_id, admin_scope=scope)
+    request.state.tenant_context = ctx
+    return admin_key
+
+
+def require_admin(_: AdminKey = Depends(get_admin_key)) -> None:
+    return None
+
+
+def require_admin_actor(admin_key: AdminKey = Depends(get_admin_key)) -> str:
     """Validate admin key and return a stable actor id for auditing."""
 
-    if not x_admin_key or not hmac.compare_digest(x_admin_key, settings.baseliner_admin_key):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
-    return hash_admin_key(x_admin_key)
+    return getattr(admin_key, "key_hash", None) or hash_admin_key(settings.baseliner_admin_key)
 
 
 def get_current_device(

@@ -13,12 +13,14 @@ _SERVER_SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SERVER_SRC) not in sys.path:
     sys.path.insert(0, str(_SERVER_SRC))
 
-from baseliner_server.api.deps import get_db, require_admin, require_admin_actor
+from baseliner_server.api.deps import get_db, hash_admin_key
+from baseliner_server.core.config import settings
+from baseliner_server.core.tenancy import DEFAULT_TENANT_ID, ensure_default_tenant
 from baseliner_server.db.base import Base
-from baseliner_server.core.tenancy import ensure_default_tenant
+from baseliner_server.db.models import AdminKey, AdminScope
 from baseliner_server.main import app
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -53,6 +55,15 @@ def db(db_engine) -> Generator[Session, None, None]:
     s = SessionLocal()
     try:
         ensure_default_tenant(s)
+        if not s.scalar(select(AdminKey).where(AdminKey.tenant_id == DEFAULT_TENANT_ID)):
+            s.add(
+                AdminKey(
+                    tenant_id=DEFAULT_TENANT_ID,
+                    key_hash=hash_admin_key(settings.baseliner_admin_key),
+                    scope=AdminScope.superadmin,
+                )
+            )
+            s.flush()
         yield s
         s.commit()
     except Exception:
@@ -69,6 +80,21 @@ def client(db_engine) -> Generator[TestClient, None, None]:
     """
     SessionLocal = sessionmaker(bind=db_engine, autoflush=False, autocommit=False, future=True)
 
+    seed_session = SessionLocal()
+    try:
+        ensure_default_tenant(seed_session)
+        if not seed_session.scalar(select(AdminKey).where(AdminKey.tenant_id == DEFAULT_TENANT_ID)):
+            seed_session.add(
+                AdminKey(
+                    tenant_id=DEFAULT_TENANT_ID,
+                    key_hash=hash_admin_key(settings.baseliner_admin_key),
+                    scope=AdminScope.superadmin,
+                )
+            )
+            seed_session.commit()
+    finally:
+        seed_session.close()
+
     def _get_db_override():
         s = SessionLocal()
         try:
@@ -76,18 +102,18 @@ def client(db_engine) -> Generator[TestClient, None, None]:
             yield s
         finally:
             s.close()
-
-    def _require_admin_override():
-        return True
-
-    def _require_admin_actor_override():
-        return "test-admin"
-
     app.dependency_overrides[get_db] = _get_db_override
-    app.dependency_overrides[require_admin] = _require_admin_override
-    app.dependency_overrides[require_admin_actor] = _require_admin_actor_override
 
     try:
-        yield TestClient(app)
+        default_headers = {
+            "X-Admin-Key": settings.baseliner_admin_key,
+            "X-Tenant-ID": str(DEFAULT_TENANT_ID),
+        }
+        yield TestClient(app, headers=default_headers)
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def admin_headers():
+    return {"X-Admin-Key": settings.baseliner_admin_key, "X-Tenant-ID": str(DEFAULT_TENANT_ID)}

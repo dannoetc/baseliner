@@ -107,6 +107,11 @@ class DeviceStatus(str, enum.Enum):
 
 
 
+class AdminScope(str, enum.Enum):
+    superadmin = "superadmin"
+    tenant_admin = "tenant_admin"
+
+
 class Tenant(Base):
     __tablename__ = "tenants"
 
@@ -260,6 +265,25 @@ class EnrollToken(Base):
 
     __table_args__ = (
         Index("ix_enroll_tokens_tenant_id", "tenant_id"),Index("ix_enroll_tokens_expires_at", "expires_at"),)
+
+
+class AdminKey(Base):
+    __tablename__ = "admin_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship()
+
+    key_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    scope: Mapped[AdminScope] = mapped_column(Enum(AdminScope), nullable=False, default=AdminScope.tenant_admin)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_admin_keys_tenant_id", "tenant_id"),)
 
 
 class AuditLog(Base):
