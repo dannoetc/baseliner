@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy.orm import Session
 
 # NOTE: dependencies live in api.deps; core.auth only contains the auth logic.
-from baseliner_server.api.deps import get_current_device, get_db
+from baseliner_server.api.deps import get_current_device, get_scoped_session
+from baseliner_server.core.tenancy import TenantScopedSession
 from baseliner_server.db.models import Device, LogEvent, Run, RunItem, RunKind, RunStatus, StepStatus
 from baseliner_server.middleware.rate_limit import enforce_device_reports_rate_limit
 from baseliner_server.schemas.policy import EffectivePolicyResponse
@@ -123,7 +123,7 @@ def _normalize_run_status(
 @router.get("/device/policy", response_model=EffectivePolicyResponse)
 def get_effective_policy(
     device: Device = Depends(get_current_device),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> EffectivePolicyResponse:
     """Return the *effective* policy for this device.
 
@@ -154,7 +154,7 @@ def submit_report(
     payload: SubmitReportRequest,
     request: Request,
     device: Device = Depends(get_current_device),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> SubmitReportResponse:
     snapshot = normalize_policy_snapshot(payload.policy_snapshot or {})
 

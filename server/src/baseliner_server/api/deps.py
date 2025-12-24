@@ -8,7 +8,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from baseliner_server.core.config import settings
-from baseliner_server.core.tenancy import DEFAULT_TENANT_ID, ensure_default_tenant
+from baseliner_server.core.tenancy import (
+    DEFAULT_TENANT_ID,
+    TenantContext,
+    TenantScopedSession,
+    ensure_default_tenant,
+    get_tenant_context,
+)
 from baseliner_server.db.models import Device, DeviceAuthToken, DeviceStatus
 from baseliner_server.db.session import SessionLocal
 
@@ -52,6 +58,12 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def get_scoped_session(
+    tenant: TenantContext = Depends(get_tenant_context), db: Session = Depends(get_db)
+) -> TenantScopedSession:
+    return TenantScopedSession(db=db, tenant=tenant)
+
+
 def get_bearer_token(authorization: Optional[str] = Header(default=None)) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
@@ -73,7 +85,7 @@ def require_admin_actor(x_admin_key: Optional[str] = Header(default=None)) -> st
 
 def get_current_device(
     request: Request,
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
     token: str = Depends(get_bearer_token),
 ) -> Device:
     """Resolve the authenticated device by bearer token.

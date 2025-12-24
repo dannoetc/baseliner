@@ -5,11 +5,15 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import and_, desc, func, or_, select
-from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from baseliner_server.api.deps import get_db, hash_token, require_admin, require_admin_actor
-from baseliner_server.core.tenancy import TenantContext, get_tenant_context
+from baseliner_server.api.deps import (
+    get_scoped_session,
+    hash_token,
+    require_admin,
+    require_admin_actor,
+)
+from baseliner_server.core.tenancy import TenantContext, TenantScopedSession, get_tenant_context
 from baseliner_server.core.policy_validation import (
     PolicyDocValidationError,
     validate_and_normalize_document,
@@ -134,7 +138,7 @@ def create_enroll_token(
     payload: CreateEnrollTokenRequest,
     tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> CreateEnrollTokenResponse:
     raw = secrets.token_urlsafe(24)
     tok = EnrollToken(
@@ -180,7 +184,7 @@ def list_enroll_tokens(
     offset: int = Query(0, ge=0),
     include_used: bool = Query(False),
     include_expired: bool = Query(True),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> EnrollTokensListResponse:
     """List enroll tokens (metadata only; never returns raw token)."""
 
@@ -240,7 +244,7 @@ def revoke_enroll_token(
     tenant: TenantContext = Depends(get_tenant_context),
     token_id: uuid.UUID = Path(..., description="Enroll token UUID"),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> RevokeEnrollTokenResponse:
     """Revoke an enroll token (implemented by expiring it immediately)."""
 
@@ -288,7 +292,7 @@ def assign_policy(
     payload: AssignPolicyRequest,
     tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> AssignPolicyResponse:
     device = db.scalar(select(Device).where(Device.id == payload.device_id, Device.tenant_id == tenant.id))
     if not device:
@@ -361,7 +365,7 @@ def assign_policy(
 def list_device_assignments(
     tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> DeviceAssignmentsResponse:
     """Return the current policy assignments for a device (admin/debug helper)."""
 
@@ -407,7 +411,7 @@ def clear_device_assignments(
     tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> ClearAssignmentsResponse:
     """Remove all policy assignments for a device (admin/debug helper)."""
 
@@ -446,7 +450,7 @@ def remove_device_assignment(
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     policy_id: uuid.UUID = Path(..., description="Policy UUID"),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> RemoveAssignmentResponse:
     """Remove a single policy assignment from a device (idempotent)."""
 
@@ -496,7 +500,7 @@ def delete_device(
         None, description="Optional deletion reason (stored for audit/debug)"
     ),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> DeleteDeviceResponse:
     """Soft-delete (deactivate) a device and revoke its current device token.
 
@@ -625,7 +629,7 @@ def restore_device(
     tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> RestoreDeviceResponse:
     """Restore a soft-deleted device (reactivate) and mint a fresh device token."""
 
@@ -717,7 +721,7 @@ def revoke_device_token(
     tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> RevokeDeviceTokenResponse:
     """Revoke the current device token and mint a new one."""
 
@@ -807,7 +811,7 @@ def revoke_device_token(
 def list_device_tokens(
     tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> DeviceTokensListResponse:
     """List device auth token history (hash prefixes + timestamps only)."""
 
@@ -848,7 +852,7 @@ def list_device_tokens(
 def debug_device_bundle(
     tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> DeviceDebugResponse:
     """First-class "debug this device" bundle for operator workflow.
 
@@ -1011,7 +1015,7 @@ def debug_device_bundle(
 def list_device_runs(
     tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> DeviceRunsResponse:
@@ -1117,7 +1121,7 @@ def list_device_runs(
 )
 def list_policies(
     tenant: TenantContext = Depends(get_tenant_context),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     include_inactive: bool = Query(
@@ -1176,7 +1180,7 @@ def list_policies(
 def get_policy(
     tenant: TenantContext = Depends(get_tenant_context),
     policy_id: uuid.UUID = Path(..., description="Policy UUID"),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> PolicyDetailResponse:
     policy = db.scalar(select(Policy).where(Policy.id == policy_id, Policy.tenant_id == tenant.id))
     if not policy:
@@ -1203,7 +1207,7 @@ def upsert_policy(
     payload: UpsertPolicyRequest,
     tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> UpsertPolicyResponse:
     existing = db.scalar(select(Policy).where(Policy.name == payload.name, Policy.tenant_id == tenant.id))
 
@@ -1270,7 +1274,7 @@ def upsert_policy(
 )
 def list_audit_events(
     tenant: TenantContext = Depends(get_tenant_context),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
     limit: int = Query(100, ge=1, le=500),
     cursor: str | None = Query(None, description="Pagination cursor from a previous response"),
     action: str | None = Query(None, description="Filter by action"),
@@ -1343,7 +1347,7 @@ def list_audit_events(
 )
 def list_devices(
     tenant: TenantContext = Depends(get_tenant_context),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     include_health: bool = Query(
@@ -1545,7 +1549,7 @@ def list_devices(
 @router.get("/admin/runs", response_model=RunsListResponse, dependencies=[Depends(require_admin)])
 def list_runs(
     tenant: TenantContext = Depends(get_tenant_context),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
     device_id: uuid.UUID | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -1589,7 +1593,7 @@ def list_runs(
 def get_run_detail(
     tenant: TenantContext = Depends(get_tenant_context),
     run_id: uuid.UUID = Path(...),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> RunDetailResponse:
     run = db.scalar(select(Run).where(Run.id == run_id, Run.tenant_id == tenant.id))
     if not run:
@@ -1659,7 +1663,7 @@ def get_run_detail(
 def compile_policy_for_device(
     device_id: uuid.UUID,
     tenant: TenantContext = Depends(get_tenant_context),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> dict[str, Any]:
     """
     Debug endpoint: compile effective policy snapshot for a device.
@@ -1690,7 +1694,7 @@ def prune_runs(
     payload: PruneRequest,
     tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
-    db: Session = Depends(get_db),
+    db: TenantScopedSession = Depends(get_scoped_session),
 ) -> PruneResponse:
     """Prune old run data to keep the database bounded.
 
