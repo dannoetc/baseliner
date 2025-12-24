@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 # NOTE: dependencies live in api.deps; core.auth only contains the auth logic.
 from baseliner_server.api.deps import get_current_device, get_scoped_session
@@ -156,6 +158,22 @@ def submit_report(
     device: Device = Depends(get_current_device),
     db: TenantScopedSession = Depends(get_scoped_session),
 ) -> SubmitReportResponse:
+    idempotency_key = (payload.idempotency_key or "").strip() or None
+
+    def _get_existing_run() -> Run | None:
+        if not idempotency_key:
+            return None
+        return db.scalar(
+            select(Run).where(
+                Run.device_id == device.id,
+                Run.idempotency_key == idempotency_key,
+            )
+        )
+
+    existing_run = _get_existing_run()
+    if existing_run:
+        return SubmitReportResponse(run_id=str(existing_run.id))
+
     snapshot = normalize_policy_snapshot(payload.policy_snapshot or {})
 
     # Authoritative counts from items (do not trust client summary).
@@ -199,12 +217,20 @@ def submit_report(
         status=status,
         agent_version=payload.agent_version,
         correlation_id=getattr(getattr(request, "state", None), "correlation_id", None),
+        idempotency_key=idempotency_key,
         effective_policy_hash=payload.effective_policy_hash,  # agent sends server hash (or fallback)
         policy_snapshot=snapshot,
         summary=summary,
     )
     db.add(run)
-    db.flush()  # run.id available
+    try:
+        db.flush()  # run.id available
+    except IntegrityError:
+        db.rollback()
+        existing_run = _get_existing_run()
+        if existing_run:
+            return SubmitReportResponse(run_id=str(existing_run.id))
+        raise
 
     # Items (we store ordinal so logs can reference it)
     ordinal_to_item_id: dict[int, uuid.UUID] = {}
@@ -268,5 +294,13 @@ def submit_report(
             )
         )
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing_run = _get_existing_run()
+        if existing_run:
+            return SubmitReportResponse(run_id=str(existing_run.id))
+        raise
+
     return SubmitReportResponse(run_id=str(run.id))
