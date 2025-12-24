@@ -78,7 +78,7 @@ def upgrade() -> None:
     for table_name, _, _ in tables:
         op.execute(
             sa.text(f"UPDATE {table_name} SET tenant_id = :tid WHERE tenant_id IS NULL").bindparams(
-                tid=str(DEFAULT_TENANT_ID)
+                sa.bindparam("tid", value=DEFAULT_TENANT_ID, type_=sa.UUID())
             )
         )
 
