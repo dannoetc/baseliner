@@ -31,6 +31,7 @@ from baseliner_server.db.models import (
     Run,
     RunItem,
 )
+from baseliner_server.services.device_tokens import rotate_device_token
 from baseliner_server.schemas.admin import (
     AssignPolicyRequest,
     AssignPolicyResponse,
@@ -537,56 +538,7 @@ def delete_device(
             device.deleted_at = utcnow()
     else:
         now = utcnow()
-
-        # Revoke the current token and rotate to an unknown value (not returned).
-        old_hash = device.auth_token_hash
-        rotated_token = secrets.token_urlsafe(32)
-        rotated_hash = hash_token(rotated_token)
-
-        device.revoked_auth_token_hash = old_hash
-        device.token_revoked_at = now
-        device.auth_token_hash = rotated_hash
-
-        # Token history: record the rotated hash (even though the device is deactivated) and revoke
-        # any previous active tokens so we have deterministic mappings for audit/debug.
-        rotated_tok = DeviceAuthToken(tenant_id=device.tenant_id, device_id=device.id, token_hash=rotated_hash, created_at=now)
-        db.add(rotated_tok)
-        db.flush()
-
-        active = (
-            db.query(DeviceAuthToken)
-            .filter(
-                DeviceAuthToken.device_id == device.id,
-                DeviceAuthToken.tenant_id == device.tenant_id,
-                DeviceAuthToken.revoked_at.is_(None),
-                DeviceAuthToken.id != rotated_tok.id,
-            )
-            .all()
-        )
-        if active:
-            for t in active:
-                t.revoked_at = now
-                t.replaced_by_id = rotated_tok.id
-                db.add(t)
-        else:
-            # Compatibility: if token history is empty, capture + revoke the legacy active hash.
-            if old_hash:
-                legacy = db.scalar(
-                    select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash, DeviceAuthToken.tenant_id == device.tenant_id)
-                )
-                if legacy is None:
-                    legacy = DeviceAuthToken(
-                        tenant_id=device.tenant_id,
-                        device_id=device.id,
-                        token_hash=old_hash,
-                        created_at=getattr(device, "enrolled_at", None) or now,
-                    )
-                    db.add(legacy)
-                    db.flush()
-                legacy.revoked_at = now
-                legacy.replaced_by_id = rotated_tok.id
-                db.add(legacy)
-
+        rotate_device_token(db=db, device=device, now=now, reason=reason, actor=admin_actor)
         device.status = DeviceStatus.deleted
         device.deleted_at = now
         if reason:
@@ -641,51 +593,7 @@ def restore_device(
         raise HTTPException(status_code=409, detail="Device is already active")
 
     now = utcnow()
-    new_token = secrets.token_urlsafe(32)
-    new_hash = hash_token(new_token)
-
-    # Token history: record the new token and revoke any prior active tokens (from the deleted state).
-    new_tok = DeviceAuthToken(tenant_id=device.tenant_id, device_id=device.id, token_hash=new_hash, created_at=now)
-    db.add(new_tok)
-    db.flush()
-
-    active = (
-        db.query(DeviceAuthToken)
-        .filter(
-            DeviceAuthToken.device_id == device.id,
-            DeviceAuthToken.tenant_id == device.tenant_id,
-            DeviceAuthToken.revoked_at.is_(None),
-            DeviceAuthToken.id != new_tok.id,
-        )
-        .all()
-    )
-
-    if active:
-        for t in active:
-            t.revoked_at = now
-            t.replaced_by_id = new_tok.id
-            db.add(t)
-    else:
-        # Compatibility: capture the legacy active hash if token history is empty.
-        old_hash = device.auth_token_hash
-        if old_hash:
-            legacy = db.scalar(
-                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash, DeviceAuthToken.tenant_id == device.tenant_id)
-            )
-            if legacy is None:
-                legacy = DeviceAuthToken(
-                    tenant_id=device.tenant_id,
-                    device_id=device.id,
-                    token_hash=old_hash,
-                    created_at=getattr(device, "enrolled_at", None) or now,
-                )
-                db.add(legacy)
-                db.flush()
-            legacy.revoked_at = now
-            legacy.replaced_by_id = new_tok.id
-            db.add(legacy)
-
-    device.auth_token_hash = new_hash
+    new_token, _ = rotate_device_token(db=db, device=device, now=now, reason="restore", actor=admin_actor)
     device.status = DeviceStatus.active
     device.deleted_at = None
     device.deleted_reason = None
@@ -733,53 +641,7 @@ def revoke_device_token(
         raise HTTPException(status_code=409, detail="Device is deactivated")
 
     now = utcnow()
-    new_token = secrets.token_urlsafe(32)
-    new_hash = hash_token(new_token)
-    old_hash = device.auth_token_hash
-
-    # Record the new token + revoke any previous active tokens.
-    new_tok = DeviceAuthToken(tenant_id=device.tenant_id, device_id=device.id, token_hash=new_hash, created_at=now)
-    db.add(new_tok)
-    db.flush()
-
-    active = (
-        db.query(DeviceAuthToken)
-        .filter(
-            DeviceAuthToken.device_id == device.id,
-            DeviceAuthToken.tenant_id == device.tenant_id,
-            DeviceAuthToken.revoked_at.is_(None),
-            DeviceAuthToken.id != new_tok.id,
-        )
-        .all()
-    )
-    if active:
-        for t in active:
-            t.revoked_at = now
-            t.replaced_by_id = new_tok.id
-            db.add(t)
-    else:
-        # Compatibility: if token history is empty, capture + revoke the legacy active hash.
-        if old_hash:
-            legacy = db.scalar(
-                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash, DeviceAuthToken.tenant_id == device.tenant_id)
-            )
-            if legacy is None:
-                legacy = DeviceAuthToken(
-                    tenant_id=device.tenant_id,
-                    device_id=device.id,
-                    token_hash=old_hash,
-                    created_at=getattr(device, "enrolled_at", None) or now,
-                )
-                db.add(legacy)
-                db.flush()
-            legacy.revoked_at = now
-            legacy.replaced_by_id = new_tok.id
-            db.add(legacy)
-
-    # Legacy fields retained for clear 403 messaging and compatibility.
-    device.revoked_auth_token_hash = old_hash
-    device.token_revoked_at = now
-    device.auth_token_hash = new_hash
+    new_token, _ = rotate_device_token(db=db, device=device, now=now, reason="admin-revoke", actor=admin_actor)
 
     emit_admin_audit(
         db,
