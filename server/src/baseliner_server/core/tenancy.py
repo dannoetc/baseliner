@@ -3,7 +3,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
+
+from sqlalchemy import and_, select
+from sqlalchemy.sql import Select
 
 if TYPE_CHECKING:  # pragma: no cover
     from sqlalchemy.orm import Session
@@ -24,7 +27,7 @@ class TenantContext:
 
     Phase 0:
       - always returns the default tenant
-      - admin key remains global
+      - admin key remains global (superadmin scope)
 
     Future:
       - admin keys can be scoped to a tenant
@@ -32,11 +35,85 @@ class TenantContext:
     """
 
     id: uuid.UUID
+    admin_scope: str = "superadmin"
+
+    @property
+    def is_superadmin(self) -> bool:
+        return self.admin_scope == "superadmin"
 
 
 def get_tenant_context() -> TenantContext:
     # FastAPI dependency (no args): returns the current tenant context.
-    return TenantContext(id=DEFAULT_TENANT_ID)
+    # Phase 0: single-tenant default with superadmin-scoped admin key.
+    return TenantContext(id=DEFAULT_TENANT_ID, admin_scope="superadmin")
+
+
+class TenantScopedSession:
+    """Session wrapper that scopes queries to the current tenant."""
+
+    def __init__(self, db: "Session", tenant: TenantContext):
+        self.db = db
+        self.tenant = tenant
+
+    def _tenant_filters(self, entities: Iterable[object]):
+        filters = []
+        for ent in entities:
+            model = getattr(ent, "entity", ent)
+            tenant_col = getattr(model, "tenant_id", None)
+            if tenant_col is not None:
+                filters.append(tenant_col == self.tenant.id)
+        return filters
+
+    def _scope_select(self, stmt: Select) -> Select:
+        tenant_filters = []
+        for from_clause in stmt.get_final_froms():
+            try:
+                tenant_col = from_clause.c.tenant_id
+            except Exception:
+                continue
+            tenant_filters.append(tenant_col == self.tenant.id)
+
+        if tenant_filters:
+            stmt = stmt.where(and_(*tenant_filters))
+        return stmt
+
+    def _maybe_scope_statement(self, stmt):
+        if isinstance(stmt, Select):
+            return self._scope_select(stmt)
+        return stmt
+
+    def query(self, *entities, **kwargs):
+        q = self.db.query(*entities, **kwargs)
+        tenant_filters = self._tenant_filters(entities)
+        if tenant_filters:
+            q = q.filter(*tenant_filters)
+        return q
+
+    def select(self, *entities):
+        stmt = select(*entities)
+        return self._scope_select(stmt)
+
+    def scalar(self, stmt, **kwargs):
+        scoped_stmt = self._maybe_scope_statement(stmt)
+        return self.db.scalar(scoped_stmt, **kwargs)
+
+    def execute(self, stmt, **kwargs):
+        scoped_stmt = self._maybe_scope_statement(stmt)
+        return self.db.execute(scoped_stmt, **kwargs)
+
+    def get(self, entity, ident, **kwargs):
+        obj = self.db.get(entity, ident, **kwargs)
+        if obj is None:
+            return None
+        tenant_col = getattr(entity, "tenant_id", None)
+        if tenant_col is None:
+            return obj
+        if getattr(obj, "tenant_id", None) != self.tenant.id:
+            return None
+        return obj
+
+    def __getattr__(self, item):
+        return getattr(self.db, item)
 
 
 def ensure_default_tenant(db: "Session") -> None:
