@@ -123,6 +123,7 @@ def test_soft_delete_revokes_and_blocks_device_token(client, db):
     assert rr.status_code == 403, rr.text
 
     # Ensure DB reflects deletion.
+    db.expire_all()
     d2 = db.scalar(select(Device).where(Device.id == dev.id))
     assert d2 is not None
     assert d2.status == DeviceStatus.deleted

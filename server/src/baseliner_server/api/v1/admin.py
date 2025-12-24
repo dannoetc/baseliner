@@ -40,6 +40,7 @@ from baseliner_server.schemas.admin import (
     DeleteDeviceResponse,
     DeviceAssignmentsResponse,
     DeviceDebugResponse,
+    RemoveAssignmentResponse,
     PolicyAssignmentDebugOut,
     PolicyAssignmentOut,
     RestoreDeviceResponse,
@@ -163,7 +164,9 @@ def create_enroll_token(
     )
 
     db.commit()
-    return CreateEnrollTokenResponse(enroll_token=raw, expires_at=tok.expires_at)
+    return CreateEnrollTokenResponse(
+        token_id=str(tok.id), token=raw, enroll_token=raw, expires_at=tok.expires_at
+    )
 
 
 @router.get(
@@ -414,7 +417,7 @@ def clear_device_assignments(
 
     removed = (
         db.query(PolicyAssignment)
-        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id, Policy.tenant_id == tenant.id)
+        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id)
         .delete(synchronize_session=False)
     )
 
@@ -431,6 +434,54 @@ def clear_device_assignments(
 
     db.commit()
     return ClearAssignmentsResponse(device_id=str(device_id), removed=int(removed or 0))
+
+
+@router.delete(
+    "/admin/devices/{device_id}/assignments/{policy_id}",
+    response_model=RemoveAssignmentResponse,
+)
+def remove_device_assignment(
+    request: Request,
+    tenant: TenantContext = Depends(get_tenant_context),
+    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    policy_id: uuid.UUID = Path(..., description="Policy UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db: Session = Depends(get_db),
+) -> RemoveAssignmentResponse:
+    """Remove a single policy assignment from a device (idempotent)."""
+
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    removed = (
+        db.query(PolicyAssignment)
+        .filter(
+            PolicyAssignment.device_id == device.id,
+            PolicyAssignment.policy_id == policy_id,
+            PolicyAssignment.tenant_id == tenant.id,
+        )
+        .delete(synchronize_session=False)
+    )
+
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant.id,
+        actor_id=admin_actor,
+        action="assignment.remove",
+        target_type="device",
+        target_id=str(device.id),
+        data={
+            "policy_id": str(policy_id),
+            "removed": int(removed or 0),
+        },
+    )
+
+    db.commit()
+    return RemoveAssignmentResponse(
+        device_id=str(device.id), policy_id=str(policy_id), removed=int(removed or 0)
+    )
 
 
 @router.delete(
@@ -468,7 +519,7 @@ def delete_device(
 
     removed = (
         db.query(PolicyAssignment)
-        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id, Policy.tenant_id == tenant.id)
+        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id)
         .delete(synchronize_session=False)
     )
 

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Generator
 
 import pytest
+
+# Ensure we import the in-repo baseliner_server package rather than any nested clones.
+_SERVER_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(_SERVER_SRC) not in sys.path:
+    sys.path.insert(0, str(_SERVER_SRC))
+
 from baseliner_server.api.deps import get_db, require_admin, require_admin_actor
 from baseliner_server.db.base import Base
 from baseliner_server.core.tenancy import ensure_default_tenant
