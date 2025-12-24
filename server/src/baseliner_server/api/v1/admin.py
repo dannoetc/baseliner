@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from baseliner_server.api.deps import get_db, hash_token, require_admin, require_admin_actor
+from baseliner_server.core.tenancy import TenantContext, get_tenant_context
 from baseliner_server.core.policy_validation import (
     PolicyDocValidationError,
     validate_and_normalize_document,
@@ -72,29 +73,15 @@ router = APIRouter(tags=["admin"])
 
 
 def utcnow() -> datetime:
-    """Return a timezone-aware UTC datetime.
-
-    The database stores timezone-aware values for enroll token timestamps, so
-    using aware datetimes here avoids mixed comparisons.
-    """
-
-    return datetime.now(timezone.utc)
-
-
-def _normalize_to_utc(dt: datetime | None) -> datetime | None:
-    """Ensure datetimes are timezone-aware in UTC for safe comparisons."""
-
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    # Return a timezone-naive UTC datetime.
+    # (SQLite + tests are using naive datetimes, so keep it consistent.)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _compute_enroll_token_expires_at(payload: CreateEnrollTokenRequest) -> datetime | None:
     # expires_at wins if explicitly provided.
     if payload.expires_at is not None:
-        return _normalize_to_utc(payload.expires_at)
+        return payload.expires_at
     if payload.ttl_seconds is None:
         return None
     try:
@@ -144,11 +131,13 @@ def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
 def create_enroll_token(
     request: Request,
     payload: CreateEnrollTokenRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> CreateEnrollTokenResponse:
     raw = secrets.token_urlsafe(24)
     tok = EnrollToken(
+        tenant_id=tenant.id,
         token_hash=hash_token(raw),
         created_at=utcnow(),
         expires_at=_compute_enroll_token_expires_at(payload),
@@ -161,6 +150,7 @@ def create_enroll_token(
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="enroll_token.create",
         target_type="enroll_token",
@@ -182,6 +172,7 @@ def create_enroll_token(
     dependencies=[Depends(require_admin)],
 )
 def list_enroll_tokens(
+    tenant: TenantContext = Depends(get_tenant_context),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     include_used: bool = Query(False),
@@ -199,12 +190,18 @@ def list_enroll_tokens(
 
     where = and_(*clauses) if clauses else None
 
-    total_stmt = select(func.count()).select_from(EnrollToken)
+    total_stmt = select(func.count()).select_from(EnrollToken).where(EnrollToken.tenant_id == tenant.id)
     if where is not None:
         total_stmt = total_stmt.where(where)
     total = int(db.scalar(total_stmt) or 0)
 
-    stmt = select(EnrollToken).order_by(desc(EnrollToken.created_at)).limit(limit).offset(offset)
+    stmt = (
+        select(EnrollToken)
+        .where(EnrollToken.tenant_id == tenant.id)
+        .order_by(desc(EnrollToken.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
     if where is not None:
         stmt = stmt.where(where)
 
@@ -212,14 +209,13 @@ def list_enroll_tokens(
     now = utcnow()
     items: list[EnrollTokenSummary] = []
     for t in rows:
-        expires_at = _normalize_to_utc(t.expires_at)
         is_used = t.used_at is not None
-        is_expired = expires_at is not None and expires_at <= now
+        is_expired = t.expires_at is not None and t.expires_at <= now
         items.append(
             EnrollTokenSummary(
                 id=str(t.id),
                 created_at=t.created_at,
-                expires_at=expires_at,
+                expires_at=t.expires_at,
                 used_at=t.used_at,
                 used_by_device_id=str(t.used_by_device_id) if t.used_by_device_id else None,
                 note=t.note,
@@ -238,13 +234,14 @@ def list_enroll_tokens(
 def revoke_enroll_token(
     request: Request,
     payload: RevokeEnrollTokenRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
     token_id: uuid.UUID = Path(..., description="Enroll token UUID"),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> RevokeEnrollTokenResponse:
     """Revoke an enroll token (implemented by expiring it immediately)."""
 
-    tok = db.scalar(select(EnrollToken).where(EnrollToken.id == token_id))
+    tok = db.scalar(select(EnrollToken).where(EnrollToken.id == token_id, EnrollToken.tenant_id == tenant.id))
     if not tok:
         raise HTTPException(status_code=404, detail="Enroll token not found")
 
@@ -260,6 +257,7 @@ def revoke_enroll_token(
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="enroll_token.revoke",
         target_type="enroll_token",
@@ -285,17 +283,18 @@ def revoke_enroll_token(
 def assign_policy(
     request: Request,
     payload: AssignPolicyRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> AssignPolicyResponse:
-    device = db.scalar(select(Device).where(Device.id == payload.device_id))
+    device = db.scalar(select(Device).where(Device.id == payload.device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
     if device.status != DeviceStatus.active:
         raise HTTPException(status_code=409, detail="Device is deactivated")
 
-    policy = db.scalar(select(Policy).where(Policy.name == payload.policy_name))
+    policy = db.scalar(select(Policy).where(Policy.name == payload.policy_name, Policy.tenant_id == tenant.id))
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
 
@@ -309,6 +308,7 @@ def assign_policy(
         select(PolicyAssignment).where(
             PolicyAssignment.device_id == device.id,
             PolicyAssignment.policy_id == policy.id,
+            PolicyAssignment.tenant_id == tenant.id,
         )
     )
 
@@ -321,6 +321,7 @@ def assign_policy(
         created = True
         db.add(
             PolicyAssignment(
+                tenant_id=tenant.id,
                 device_id=device.id,
                 policy_id=policy.id,
                 mode=mode,
@@ -331,6 +332,7 @@ def assign_policy(
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="assignment.set",
         target_type="device",
@@ -354,12 +356,13 @@ def assign_policy(
     dependencies=[Depends(require_admin)],
 )
 def list_device_assignments(
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
 ) -> DeviceAssignmentsResponse:
     """Return the current policy assignments for a device (admin/debug helper)."""
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
@@ -368,7 +371,7 @@ def list_device_assignments(
     rows = (
         db.query(PolicyAssignment, Policy)
         .join(Policy, Policy.id == PolicyAssignment.policy_id)
-        .filter(PolicyAssignment.device_id == device.id)
+        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id, Policy.tenant_id == tenant.id)
         .order_by(
             PolicyAssignment.priority.asc(),
             PolicyAssignment.created_at.asc(),
@@ -398,25 +401,27 @@ def list_device_assignments(
 )
 def clear_device_assignments(
     request: Request,
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> ClearAssignmentsResponse:
     """Remove all policy assignments for a device (admin/debug helper)."""
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
     removed = (
         db.query(PolicyAssignment)
-        .filter(PolicyAssignment.device_id == device.id)
+        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id, Policy.tenant_id == tenant.id)
         .delete(synchronize_session=False)
     )
 
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="assignment.clear",
         target_type="device",
@@ -434,6 +439,7 @@ def clear_device_assignments(
 )
 def delete_device(
     request: Request,
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     reason: str | None = Query(
         None, description="Optional deletion reason (stored for audit/debug)"
@@ -453,7 +459,7 @@ def delete_device(
       - all active policy assignments removed
     """
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
@@ -462,7 +468,7 @@ def delete_device(
 
     removed = (
         db.query(PolicyAssignment)
-        .filter(PolicyAssignment.device_id == device.id)
+        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id, Policy.tenant_id == tenant.id)
         .delete(synchronize_session=False)
     )
 
@@ -488,7 +494,7 @@ def delete_device(
 
         # Token history: record the rotated hash (even though the device is deactivated) and revoke
         # any previous active tokens so we have deterministic mappings for audit/debug.
-        rotated_tok = DeviceAuthToken(device_id=device.id, token_hash=rotated_hash, created_at=now)
+        rotated_tok = DeviceAuthToken(tenant_id=device.tenant_id, device_id=device.id, token_hash=rotated_hash, created_at=now)
         db.add(rotated_tok)
         db.flush()
 
@@ -496,6 +502,7 @@ def delete_device(
             db.query(DeviceAuthToken)
             .filter(
                 DeviceAuthToken.device_id == device.id,
+                DeviceAuthToken.tenant_id == device.tenant_id,
                 DeviceAuthToken.revoked_at.is_(None),
                 DeviceAuthToken.id != rotated_tok.id,
             )
@@ -510,10 +517,11 @@ def delete_device(
             # Compatibility: if token history is empty, capture + revoke the legacy active hash.
             if old_hash:
                 legacy = db.scalar(
-                    select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash)
+                    select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash, DeviceAuthToken.tenant_id == device.tenant_id)
                 )
                 if legacy is None:
                     legacy = DeviceAuthToken(
+                        tenant_id=device.tenant_id,
                         device_id=device.id,
                         token_hash=old_hash,
                         created_at=getattr(device, "enrolled_at", None) or now,
@@ -532,6 +540,7 @@ def delete_device(
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="device.delete",
         target_type="device",
@@ -562,13 +571,14 @@ def delete_device(
 )
 def restore_device(
     request: Request,
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> RestoreDeviceResponse:
     """Restore a soft-deleted device (reactivate) and mint a fresh device token."""
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
@@ -580,7 +590,7 @@ def restore_device(
     new_hash = hash_token(new_token)
 
     # Token history: record the new token and revoke any prior active tokens (from the deleted state).
-    new_tok = DeviceAuthToken(device_id=device.id, token_hash=new_hash, created_at=now)
+    new_tok = DeviceAuthToken(tenant_id=device.tenant_id, device_id=device.id, token_hash=new_hash, created_at=now)
     db.add(new_tok)
     db.flush()
 
@@ -588,6 +598,7 @@ def restore_device(
         db.query(DeviceAuthToken)
         .filter(
             DeviceAuthToken.device_id == device.id,
+            DeviceAuthToken.tenant_id == device.tenant_id,
             DeviceAuthToken.revoked_at.is_(None),
             DeviceAuthToken.id != new_tok.id,
         )
@@ -604,10 +615,11 @@ def restore_device(
         old_hash = device.auth_token_hash
         if old_hash:
             legacy = db.scalar(
-                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash)
+                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash, DeviceAuthToken.tenant_id == device.tenant_id)
             )
             if legacy is None:
                 legacy = DeviceAuthToken(
+                    tenant_id=device.tenant_id,
                     device_id=device.id,
                     token_hash=old_hash,
                     created_at=getattr(device, "enrolled_at", None) or now,
@@ -626,6 +638,7 @@ def restore_device(
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="device.restore",
         target_type="device",
@@ -650,13 +663,14 @@ def restore_device(
 )
 def revoke_device_token(
     request: Request,
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> RevokeDeviceTokenResponse:
     """Revoke the current device token and mint a new one."""
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
@@ -669,7 +683,7 @@ def revoke_device_token(
     old_hash = device.auth_token_hash
 
     # Record the new token + revoke any previous active tokens.
-    new_tok = DeviceAuthToken(device_id=device.id, token_hash=new_hash, created_at=now)
+    new_tok = DeviceAuthToken(tenant_id=device.tenant_id, device_id=device.id, token_hash=new_hash, created_at=now)
     db.add(new_tok)
     db.flush()
 
@@ -677,6 +691,7 @@ def revoke_device_token(
         db.query(DeviceAuthToken)
         .filter(
             DeviceAuthToken.device_id == device.id,
+            DeviceAuthToken.tenant_id == device.tenant_id,
             DeviceAuthToken.revoked_at.is_(None),
             DeviceAuthToken.id != new_tok.id,
         )
@@ -691,10 +706,11 @@ def revoke_device_token(
         # Compatibility: if token history is empty, capture + revoke the legacy active hash.
         if old_hash:
             legacy = db.scalar(
-                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash)
+                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash, DeviceAuthToken.tenant_id == device.tenant_id)
             )
             if legacy is None:
                 legacy = DeviceAuthToken(
+                    tenant_id=device.tenant_id,
                     device_id=device.id,
                     token_hash=old_hash,
                     created_at=getattr(device, "enrolled_at", None) or now,
@@ -713,6 +729,7 @@ def revoke_device_token(
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="device.revoke_token",
         target_type="device",
@@ -737,18 +754,19 @@ def revoke_device_token(
     dependencies=[Depends(require_admin)],
 )
 def list_device_tokens(
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
 ) -> DeviceTokensListResponse:
     """List device auth token history (hash prefixes + timestamps only)."""
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
     toks = db.scalars(
         select(DeviceAuthToken)
-        .where(DeviceAuthToken.device_id == device.id)
+        .where(DeviceAuthToken.device_id == device.id, DeviceAuthToken.tenant_id == tenant.id)
         .order_by(DeviceAuthToken.created_at.desc())
     ).all()
 
@@ -777,6 +795,7 @@ def list_device_tokens(
     dependencies=[Depends(require_admin)],
 )
 def debug_device_bundle(
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
 ) -> DeviceDebugResponse:
@@ -789,7 +808,7 @@ def debug_device_bundle(
       - last run summary + items
     """
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
@@ -797,7 +816,7 @@ def debug_device_bundle(
     rows = (
         db.query(PolicyAssignment, Policy)
         .join(Policy, Policy.id == PolicyAssignment.policy_id)
-        .filter(PolicyAssignment.device_id == device.id)
+        .filter(PolicyAssignment.device_id == device.id, PolicyAssignment.tenant_id == tenant.id, Policy.tenant_id == tenant.id)
         .order_by(
             PolicyAssignment.priority.asc(),
             PolicyAssignment.created_at.asc(),
@@ -836,7 +855,7 @@ def debug_device_bundle(
     # Last run (summary + items)
     last_run = db.scalar(
         select(Run)
-        .where(Run.device_id == device.id)
+        .where(Run.device_id == device.id, Run.tenant_id == tenant.id)
         .order_by(desc(Run.started_at), desc(Run.id))
         .limit(1)
     )
@@ -939,6 +958,7 @@ def debug_device_bundle(
     dependencies=[Depends(require_admin)],
 )
 def list_device_runs(
+    tenant: TenantContext = Depends(get_tenant_context),
     device_id: uuid.UUID = Path(..., description="Device UUID"),
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=200),
@@ -950,11 +970,11 @@ def list_device_runs(
     fetching full run details.
     """
 
-    device = db.scalar(select(Device).where(Device.id == device_id))
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    base = select(Run).where(Run.device_id == device.id)
+    base = select(Run).where(Run.tenant_id == tenant.id).where(Run.device_id == device.id, Run.tenant_id == tenant.id)
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
 
     stmt = base.order_by(desc(Run.started_at), desc(Run.id)).offset(offset).limit(limit)
@@ -1045,6 +1065,7 @@ def list_device_runs(
     dependencies=[Depends(require_admin)],
 )
 def list_policies(
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -1057,7 +1078,7 @@ def list_policies(
         description="Substring search on policy name/description (case-insensitive).",
     ),
 ) -> PoliciesListResponse:
-    stmt = select(Policy)
+    stmt = select(Policy).where(Policy.tenant_id == tenant.id)
 
     if not include_inactive:
         stmt = stmt.where(Policy.is_active.is_(True))
@@ -1102,10 +1123,11 @@ def list_policies(
     dependencies=[Depends(require_admin)],
 )
 def get_policy(
+    tenant: TenantContext = Depends(get_tenant_context),
     policy_id: uuid.UUID = Path(..., description="Policy UUID"),
     db: Session = Depends(get_db),
 ) -> PolicyDetailResponse:
-    policy = db.scalar(select(Policy).where(Policy.id == policy_id))
+    policy = db.scalar(select(Policy).where(Policy.id == policy_id, Policy.tenant_id == tenant.id))
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
 
@@ -1128,10 +1150,11 @@ def get_policy(
 def upsert_policy(
     request: Request,
     payload: UpsertPolicyRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> UpsertPolicyResponse:
-    existing = db.scalar(select(Policy).where(Policy.name == payload.name))
+    existing = db.scalar(select(Policy).where(Policy.name == payload.name, Policy.tenant_id == tenant.id))
 
     try:
         normalized_doc = validate_and_normalize_document(payload.document)
@@ -1157,6 +1180,7 @@ def upsert_policy(
     else:
         created = True
         policy = Policy(
+            tenant_id=tenant.id,
             name=payload.name,
             description=payload.description,
             schema_version=payload.schema_version,
@@ -1172,6 +1196,7 @@ def upsert_policy(
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="policy.upsert",
         target_type="policy",
@@ -1193,6 +1218,7 @@ def upsert_policy(
     dependencies=[Depends(require_admin)],
 )
 def list_audit_events(
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
     limit: int = Query(100, ge=1, le=500),
     cursor: str | None = Query(None, description="Pagination cursor from a previous response"),
@@ -1213,7 +1239,7 @@ def list_audit_events(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid cursor")
 
-    stmt = select(AuditLog)
+    stmt = select(AuditLog).where(AuditLog.tenant_id == tenant.id)
 
     if action:
         stmt = stmt.where(AuditLog.action == action)
@@ -1265,6 +1291,7 @@ def list_audit_events(
     dependencies=[Depends(require_admin)],
 )
 def list_devices(
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -1300,6 +1327,7 @@ def list_devices(
     runs_any_ranked = (
         select(
             Run.id.label("run_id"),
+            Run.tenant_id.label("tenant_id"),
             Run.device_id.label("device_id"),
             Run.kind.label("kind"),
             Run.started_at.label("started_at"),
@@ -1313,11 +1341,13 @@ def list_devices(
             .over(partition_by=Run.device_id, order_by=(Run.started_at.desc(), Run.id.desc()))
             .label("rn"),
         )
+        .where(Run.tenant_id == tenant.id)
     ).subquery()
 
     runs_apply_ranked = (
         select(
             Run.id.label("apply_run_id"),
+            Run.tenant_id.label("apply_tenant_id"),
             Run.device_id.label("apply_device_id"),
             Run.kind.label("apply_kind"),
             Run.started_at.label("apply_started_at"),
@@ -1327,9 +1357,10 @@ def list_devices(
             .over(partition_by=Run.device_id, order_by=(Run.started_at.desc(), Run.id.desc()))
             .label("apply_rn"),
         )
+        .where(Run.tenant_id == tenant.id)
     ).subquery()
 
-    stmt = select(Device, runs_any_ranked, runs_apply_ranked)
+    stmt = select(Device, runs_any_ranked, runs_apply_ranked).where(Device.tenant_id == tenant.id)
     if not include_deleted:
         stmt = stmt.where(Device.status == DeviceStatus.active)
 
@@ -1462,12 +1493,13 @@ def list_devices(
 
 @router.get("/admin/runs", response_model=RunsListResponse, dependencies=[Depends(require_admin)])
 def list_runs(
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
     device_id: uuid.UUID | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> RunsListResponse:
-    base = select(Run)
+    base = select(Run).where(Run.tenant_id == tenant.id)
     if device_id:
         base = base.where(Run.device_id == device_id)
 
@@ -1504,21 +1536,22 @@ def list_runs(
     dependencies=[Depends(require_admin)],
 )
 def get_run_detail(
+    tenant: TenantContext = Depends(get_tenant_context),
     run_id: uuid.UUID = Path(...),
     db: Session = Depends(get_db),
 ) -> RunDetailResponse:
-    run = db.scalar(select(Run).where(Run.id == run_id))
+    run = db.scalar(select(Run).where(Run.id == run_id, Run.tenant_id == tenant.id))
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
     items = list(
         db.scalars(
-            select(RunItem).where(RunItem.run_id == run.id).order_by(RunItem.ordinal.asc())
+            select(RunItem).where(RunItem.run_id == run.id, RunItem.tenant_id == tenant.id).order_by(RunItem.ordinal.asc())
         ).all()
     )
     logs = list(
         db.scalars(
-            select(LogEvent).where(LogEvent.run_id == run.id).order_by(LogEvent.ts.asc())
+            select(LogEvent).where(LogEvent.run_id == run.id, LogEvent.tenant_id == tenant.id).order_by(LogEvent.ts.asc())
         ).all()
     )
 
@@ -1573,7 +1606,9 @@ def get_run_detail(
     dependencies=[Depends(require_admin)],
 )
 def compile_policy_for_device(
-    device_id: uuid.UUID, db: Session = Depends(get_db)
+    device_id: uuid.UUID,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """
     Debug endpoint: compile effective policy snapshot for a device.
@@ -1581,7 +1616,7 @@ def compile_policy_for_device(
     Called like:
       POST /api/v1/admin/compile?device_id=<uuid>
     """
-    dev = db.get(Device, device_id)
+    dev = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
 
@@ -1602,6 +1637,7 @@ def _chunked(seq: list[Any], size: int) -> list[list[Any]]:
 def prune_runs(
     request: Request,
     payload: PruneRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
     admin_actor: str = Depends(require_admin_actor),
     db: Session = Depends(get_db),
 ) -> PruneResponse:
@@ -1625,6 +1661,7 @@ def prune_runs(
     ranked = (
         select(
             Run.id.label("run_id"),
+            Run.tenant_id.label("tenant_id"),
             Run.device_id.label("device_id"),
             Run.started_at.label("started_at"),
             func.row_number()
@@ -1634,6 +1671,7 @@ def prune_runs(
             )
             .label("rn"),
         )
+        .where(Run.tenant_id == tenant.id)
     ).subquery()
 
     # rank condition: delete anything beyond the per-device keep limit.
@@ -1658,12 +1696,12 @@ def prune_runs(
 
     if run_ids:
         counts_items = int(
-            db.scalar(select(func.count()).select_from(RunItem).where(RunItem.run_id.in_(run_ids)))
+            db.scalar(select(func.count()).select_from(RunItem).where(RunItem.run_id.in_(run_ids), RunItem.tenant_id == tenant.id))
             or 0
         )
         counts_logs = int(
             db.scalar(
-                select(func.count()).select_from(LogEvent).where(LogEvent.run_id.in_(run_ids))
+                select(func.count()).select_from(LogEvent).where(LogEvent.run_id.in_(run_ids), LogEvent.tenant_id == tenant.id)
             )
             or 0
         )
@@ -1706,20 +1744,21 @@ def prune_runs(
             continue
 
         deleted_logs += int(
-            db.query(LogEvent).filter(LogEvent.run_id.in_(chunk)).delete(synchronize_session=False)
+            db.query(LogEvent).filter(LogEvent.run_id.in_(chunk), LogEvent.tenant_id == tenant.id).delete(synchronize_session=False)
             or 0
         )
         deleted_items += int(
-            db.query(RunItem).filter(RunItem.run_id.in_(chunk)).delete(synchronize_session=False)
+            db.query(RunItem).filter(RunItem.run_id.in_(chunk), RunItem.tenant_id == tenant.id).delete(synchronize_session=False)
             or 0
         )
         deleted_runs += int(
-            db.query(Run).filter(Run.id.in_(chunk)).delete(synchronize_session=False) or 0
+            db.query(Run).filter(Run.id.in_(chunk), Run.tenant_id == tenant.id).delete(synchronize_session=False) or 0
         )
 
     emit_admin_audit(
         db,
         request,
+        tenant_id=tenant.id,
         actor_id=admin_actor,
         action="maintenance.prune",
         data={

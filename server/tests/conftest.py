@@ -8,6 +8,7 @@ from typing import Generator
 import pytest
 from baseliner_server.api.deps import get_db, require_admin, require_admin_actor
 from baseliner_server.db.base import Base
+from baseliner_server.core.tenancy import ensure_default_tenant
 from baseliner_server.main import app
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -44,6 +45,7 @@ def db(db_engine) -> Generator[Session, None, None]:
     SessionLocal = sessionmaker(bind=db_engine, autoflush=False, autocommit=False, future=True)
     s = SessionLocal()
     try:
+        ensure_default_tenant(s)
         yield s
         s.commit()
     except Exception:
@@ -63,6 +65,7 @@ def client(db_engine) -> Generator[TestClient, None, None]:
     def _get_db_override():
         s = SessionLocal()
         try:
+            ensure_default_tenant(s)
             yield s
         finally:
             s.close()

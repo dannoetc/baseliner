@@ -79,10 +79,12 @@ def compile_effective_policy(db: Session, device: Device | str | uuid.UUID) -> P
     if isinstance(device, Device):
         device_id = _as_uuid(str(device.id))
         device_key = device.device_key
+        tenant_id = getattr(device, "tenant_id", None)
     else:
         device_id = _as_uuid(device)
         dev = db.get(Device, device_id)
         device_key = dev.device_key if dev else None
+        tenant_id = getattr(dev, "tenant_id", None) if dev else None
 
     # Deterministic ordering is critical for operator trust:
     #   1) priority ASC (lower wins)
@@ -91,7 +93,12 @@ def compile_effective_policy(db: Session, device: Device | str | uuid.UUID) -> P
     stmt = (
         select(PolicyAssignment, Policy)
         .join(Policy, Policy.id == PolicyAssignment.policy_id)
-        .where(PolicyAssignment.device_id == device_id, Policy.is_active.is_(True))
+        .where(
+            PolicyAssignment.device_id == device_id,
+            Policy.is_active.is_(True),
+            (PolicyAssignment.tenant_id == tenant_id) if tenant_id is not None else True,
+            (Policy.tenant_id == tenant_id) if tenant_id is not None else True,
+        )
         .order_by(
             PolicyAssignment.priority.asc(),
             PolicyAssignment.created_at.asc(),

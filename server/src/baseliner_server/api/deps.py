@@ -8,6 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from baseliner_server.core.config import settings
+from baseliner_server.core.tenancy import DEFAULT_TENANT_ID, ensure_default_tenant
 from baseliner_server.db.models import Device, DeviceAuthToken, DeviceStatus
 from baseliner_server.db.session import SessionLocal
 
@@ -44,6 +45,8 @@ def hash_admin_key(admin_key: str) -> str:
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
+        # Phase 0 tenancy plumbing: ensure the default tenant exists for dev/test DBs.
+        ensure_default_tenant(db)
         yield db
     finally:
         db.close()
@@ -107,6 +110,7 @@ def get_current_device(
 
         # Active legacy token: create a history row so subsequent lookups are consistent.
         tok = DeviceAuthToken(
+            tenant_id=(getattr(device, "tenant_id", None) or DEFAULT_TENANT_ID),
             device_id=device.id,
             token_hash=token_h,
             created_at=getattr(device, "enrolled_at", None) or utcnow(),

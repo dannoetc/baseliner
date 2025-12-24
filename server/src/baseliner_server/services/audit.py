@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from baseliner_server.db.models import AuditLog
+from baseliner_server.core.tenancy import DEFAULT_TENANT_ID
 
 
 def _get_correlation_id(request: Request) -> str | None:
@@ -39,6 +40,7 @@ def emit_admin_audit(
     db: Session,
     request: Request,
     *,
+    tenant_id: object | None = None,
     actor_id: str,
     action: str,
     target_type: str | None = None,
@@ -52,6 +54,7 @@ def emit_admin_audit(
     """
 
     row = AuditLog(
+        tenant_id=(tenant_id or DEFAULT_TENANT_ID),
         actor_type="admin_key",
         actor_id=actor_id,
         action=action,

@@ -189,6 +189,7 @@ def submit_report(
     summary.setdefault("failed", summary["items_failed"])
 
     run = Run(
+        tenant_id=device.tenant_id,
         device_id=device.id,
         started_at=payload.started_at,
         ended_at=ended_at,
@@ -209,6 +210,7 @@ def submit_report(
     ordinal_to_item_id: dict[int, uuid.UUID] = {}
     for item in payload.items or []:
         run_item = RunItem(
+            tenant_id=run.tenant_id,
             run_id=run.id,
             resource_type=item.resource_type,
             resource_id=item.resource_id,
@@ -235,6 +237,7 @@ def submit_report(
         # Useful breadcrumb for debugging client/server mismatch.
         db.add(
             LogEvent(
+                tenant_id=run.tenant_id,
                 run_id=run.id,
                 run_item_id=None,
                 ts=utcnow(),
@@ -255,6 +258,7 @@ def submit_report(
 
         db.add(
             LogEvent(
+                tenant_id=run.tenant_id,
                 run_id=run.id,
                 run_item_id=run_item_id,
                 ts=log.ts or utcnow(),

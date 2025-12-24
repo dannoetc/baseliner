@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from baseliner_server.api.deps import get_db, hash_token
+from baseliner_server.core.tenancy import DEFAULT_TENANT_ID
 from baseliner_server.db.models import Device, DeviceAuthToken, DeviceStatus, EnrollToken
 from baseliner_server.schemas.enroll import EnrollRequest, EnrollResponse
 
@@ -55,6 +56,7 @@ def _revoke_active_device_tokens(
         db.query(DeviceAuthToken)
         .filter(
             DeviceAuthToken.device_id == device.id,
+            DeviceAuthToken.tenant_id == device.tenant_id,
             DeviceAuthToken.revoked_at.is_(None),
             DeviceAuthToken.id != new_token_row.id,
         )
@@ -76,6 +78,7 @@ def _revoke_active_device_tokens(
     legacy = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash))
     if legacy is None:
         legacy = DeviceAuthToken(
+            tenant_id=device.tenant_id,
             device_id=device.id,
             token_hash=old_hash,
             created_at=getattr(device, "enrolled_at", None) or now,
@@ -96,6 +99,8 @@ def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollRespo
     if not enroll_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid enroll token")
 
+    tenant_id = getattr(enroll_token, "tenant_id", None) or DEFAULT_TENANT_ID
+
     if enroll_token.used_at is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Enroll token already used")
 
@@ -104,6 +109,12 @@ def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollRespo
 
     # Create or update device
     device = db.scalar(select(Device).where(Device.device_key == payload.device_key))
+
+    if device is not None and getattr(device, "tenant_id", None) != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Device belongs to a different tenant; cannot enroll",
+        )
 
     if device is not None and device.status != DeviceStatus.active:
         raise HTTPException(
@@ -119,6 +130,7 @@ def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollRespo
 
     if device is None:
         device = Device(
+            tenant_id=tenant_id,
             device_key=payload.device_key,
             hostname=payload.hostname,
             os=payload.os,
@@ -136,6 +148,7 @@ def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollRespo
         # History row for the minted token.
         db.add(
             DeviceAuthToken(
+                tenant_id=tenant_id,
                 device_id=device.id,
                 token_hash=device_token_hash,
                 created_at=now,
@@ -156,6 +169,7 @@ def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollRespo
 
         # Create new token row first so we can link revocations.
         new_tok = DeviceAuthToken(
+            tenant_id=tenant_id,
             device_id=device.id,
             token_hash=device_token_hash,
             created_at=now,

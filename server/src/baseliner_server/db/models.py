@@ -22,6 +22,8 @@ from sqlalchemy.types import TypeDecorator
 
 from .base import Base
 
+from baseliner_server.core.tenancy import DEFAULT_TENANT_ID
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -104,10 +106,41 @@ class DeviceStatus(str, enum.Enum):
     deleted = "deleted"
 
 
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    devices: Mapped[list["Device"]] = relationship(back_populates="tenant")
+    auth_tokens: Mapped[list["DeviceAuthToken"]] = relationship(back_populates="tenant")
+    enroll_tokens: Mapped[list["EnrollToken"]] = relationship(back_populates="tenant")
+    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="tenant")
+    policies: Mapped[list["Policy"]] = relationship(back_populates="tenant")
+    assignments: Mapped[list["PolicyAssignment"]] = relationship(back_populates="tenant")
+    runs: Mapped[list["Run"]] = relationship(back_populates="tenant")
+    run_items: Mapped[list["RunItem"]] = relationship(back_populates="tenant")
+    log_events: Mapped[list["LogEvent"]] = relationship(back_populates="tenant")
+
+    __table_args__ = (Index("ix_tenants_name", "name"),)
+
+
 class Device(Base):
     __tablename__ = "devices"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="devices")
+
 
     # Agent-provided stable key (e.g., hash of SMBIOS UUID + serial, etc.)
     device_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
@@ -151,6 +184,7 @@ class Device(Base):
     )
 
     __table_args__ = (
+        Index("ix_devices_tenant_id", "tenant_id"),
         Index("ix_devices_last_seen_at", "last_seen_at"),
         Index("ix_devices_status", "status"),
         Index("ix_devices_token_revoked_at", "token_revoked_at"),
@@ -161,6 +195,12 @@ class DeviceAuthToken(Base):
     __tablename__ = "device_auth_tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="auth_tokens")
+
 
     device_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False
@@ -186,6 +226,7 @@ class DeviceAuthToken(Base):
     device: Mapped["Device"] = relationship(back_populates="auth_tokens", foreign_keys=[device_id])
 
     __table_args__ = (
+        Index("ix_device_auth_tokens_tenant_id", "tenant_id"),
         Index("ix_device_auth_tokens_device_id_created_at", "device_id", "created_at"),
         Index("ix_device_auth_tokens_token_hash", "token_hash"),
         Index("ix_device_auth_tokens_revoked_at", "revoked_at"),
@@ -196,6 +237,12 @@ class EnrollToken(Base):
     __tablename__ = "enroll_tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="enroll_tokens")
+
 
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
 
@@ -211,13 +258,20 @@ class EnrollToken(Base):
 
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (Index("ix_enroll_tokens_expires_at", "expires_at"),)
+    __table_args__ = (
+        Index("ix_enroll_tokens_tenant_id", "tenant_id"),Index("ix_enroll_tokens_expires_at", "expires_at"),)
 
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="audit_logs")
+
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     # For MVP, actor is the admin key (hashed). This leaves room for future auth models.
@@ -238,6 +292,7 @@ class AuditLog(Base):
     data: Mapped[dict] = mapped_column(JSON_COL, nullable=False, default=dict)
 
     __table_args__ = (
+        Index("ix_audit_logs_tenant_id_ts", "tenant_id", "ts"),
         Index("ix_audit_logs_ts", "ts"),
         Index("ix_audit_logs_action", "action"),
         Index("ix_audit_logs_target", "target_type", "target_id"),
@@ -248,6 +303,12 @@ class Policy(Base):
     __tablename__ = "policies"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="policies")
+
 
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -268,13 +329,20 @@ class Policy(Base):
         back_populates="policy", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("ix_policies_is_active", "is_active"),)
+    __table_args__ = (
+        Index("ix_policies_tenant_id", "tenant_id"),Index("ix_policies_is_active", "is_active"),)
 
 
 class PolicyAssignment(Base):
     __tablename__ = "policy_assignments"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="assignments")
+
 
     device_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("devices.id", ondelete="CASCADE")
@@ -296,6 +364,7 @@ class PolicyAssignment(Base):
     policy: Mapped["Policy"] = relationship(back_populates="assignments")
 
     __table_args__ = (
+        Index("ix_policy_assignments_tenant_id", "tenant_id"),
         UniqueConstraint("device_id", "policy_id", name="uq_policy_assignment_device_policy"),
         Index("ix_policy_assignments_device_id", "device_id"),
         Index("ix_policy_assignments_policy_id", "policy_id"),
@@ -306,6 +375,12 @@ class Run(Base):
     __tablename__ = "runs"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="runs")
+
 
     device_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("devices.id", ondelete="CASCADE")
@@ -346,6 +421,7 @@ class Run(Base):
     )
 
     __table_args__ = (
+        Index("ix_runs_tenant_id_started_at", "tenant_id", "started_at"),
         Index("ix_runs_device_id_started_at", "device_id", "started_at"),
         Index("ix_runs_device_id_kind_started_at", "device_id", "kind", "started_at"),
         Index("ix_runs_correlation_id", "correlation_id"),
@@ -356,6 +432,12 @@ class RunItem(Base):
     __tablename__ = "run_items"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="run_items")
+
 
     run_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("runs.id", ondelete="CASCADE"))
 
@@ -395,6 +477,7 @@ class RunItem(Base):
     )
 
     __table_args__ = (
+        Index("ix_run_items_tenant_id_run_id", "tenant_id", "run_id"),
         Index("ix_run_items_run_id", "run_id"),
         Index("ix_run_items_run_id_ordinal", "run_id", "ordinal"),
         Index("ix_run_items_resource_type_id", "resource_type", "resource_id"),
@@ -405,6 +488,12 @@ class LogEvent(Base):
     __tablename__ = "log_events"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, default=DEFAULT_TENANT_ID
+    )
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="log_events")
+
 
     run_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("runs.id", ondelete="CASCADE"))
     run_item_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -421,6 +510,7 @@ class LogEvent(Base):
     run_item: Mapped["RunItem"] = relationship(back_populates="logs")
 
     __table_args__ = (
+        Index("ix_log_events_tenant_id_run_id_ts", "tenant_id", "run_id", "ts"),
         Index("ix_log_events_run_id_ts", "run_id", "ts"),
         Index("ix_log_events_run_item_id", "run_item_id"),
     )
