@@ -3,10 +3,9 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from baseliner_server.api.deps import get_db, hash_token
-from baseliner_server.core.tenancy import DEFAULT_TENANT_ID
+from baseliner_server.api.deps import get_scoped_session, hash_token
+from baseliner_server.core.tenancy import DEFAULT_TENANT_ID, TenantScopedSession
 from baseliner_server.db.models import Device, DeviceAuthToken, DeviceStatus, EnrollToken
 from baseliner_server.schemas.enroll import EnrollRequest, EnrollResponse
 
@@ -41,7 +40,7 @@ def _select_enroll_token_for_update(token_hash: str):
 
 def _revoke_active_device_tokens(
     *,
-    db: Session,
+    db: TenantScopedSession,
     device: Device,
     now: datetime,
     new_token_row: DeviceAuthToken,
@@ -92,7 +91,7 @@ def _revoke_active_device_tokens(
 
 
 @router.post("/enroll", response_model=EnrollResponse)
-def enroll(payload: EnrollRequest, db: Session = Depends(get_db)) -> EnrollResponse:
+def enroll(payload: EnrollRequest, db: TenantScopedSession = Depends(get_scoped_session)) -> EnrollResponse:
     token_hash = hash_token(payload.enroll_token)
     enroll_token = db.scalar(_select_enroll_token_for_update(token_hash))
 
