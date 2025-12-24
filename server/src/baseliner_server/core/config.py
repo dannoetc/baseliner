@@ -4,9 +4,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str
-    baseliner_token_pepper: str
-    baseliner_admin_key: str
+    # Defaults keep test/development environments bootable without env vars.
+    # Production deployments should override these via environment variables.
+    database_url: str = "sqlite:///./baseliner.db"
+    baseliner_token_pepper: str = "insecure-test-pepper"
+    baseliner_admin_key: str = "test-admin-key"
 
     # --- Request hardening (Issue #23) ---
     # NOTE: These defaults are intentionally conservative and can be tuned via env vars.

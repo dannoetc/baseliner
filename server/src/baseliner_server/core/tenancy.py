@@ -81,3 +81,12 @@ def ensure_default_tenant(db: "Session") -> None:
             db.rollback()
         except Exception:
             pass
+        return
+
+    try:
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass

@@ -69,6 +69,7 @@ def test_audit_logs_device_delete_includes_reason(client: TestClient, db):
     assert ev["data"]["reason"] == "testing"
 
     # Confirm device is deleted at DB layer too
+    db.expire_all()
     d2 = db.scalar(select(Device).where(Device.id == dev.id))
     assert d2 is not None
     assert d2.status == DeviceStatus.deleted

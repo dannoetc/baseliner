@@ -38,6 +38,8 @@ class CreateEnrollTokenRequest(BaseModel):
 
 
 class CreateEnrollTokenResponse(BaseModel):
+    token_id: str
+    token: str
     enroll_token: str
     expires_at: datetime | None = None
 
