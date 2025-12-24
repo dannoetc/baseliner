@@ -161,6 +161,7 @@ def create_enroll_token(
     db.commit()
     return CreateEnrollTokenResponse(enroll_token=raw, expires_at=tok.expires_at)
 
+
 @router.get(
     "/admin/enroll-tokens",
     response_model=EnrollTokensListResponse,
@@ -198,7 +199,7 @@ def list_enroll_tokens(
     items: list[EnrollTokenSummary] = []
     for t in rows:
         is_used = t.used_at is not None
-        is_expired = (t.expires_at is not None and t.expires_at <= now)
+        is_expired = t.expires_at is not None and t.expires_at <= now
         items.append(
             EnrollTokenSummary(
                 id=str(t.id),
@@ -260,8 +261,6 @@ def revoke_enroll_token(
         expires_at=tok.expires_at,
         note=tok.note,
     )
-
-
 
 
 @router.post(
@@ -495,7 +494,9 @@ def delete_device(
         else:
             # Compatibility: if token history is empty, capture + revoke the legacy active hash.
             if old_hash:
-                legacy = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash))
+                legacy = db.scalar(
+                    select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash)
+                )
                 if legacy is None:
                     legacy = DeviceAuthToken(
                         device_id=device.id,
@@ -538,6 +539,8 @@ def delete_device(
         token_revoked_at=device.token_revoked_at,
         assignments_removed=int(removed or 0),
     )
+
+
 @router.post(
     "/admin/devices/{device_id}/restore",
     response_model=RestoreDeviceResponse,
@@ -585,7 +588,9 @@ def restore_device(
         # Compatibility: capture the legacy active hash if token history is empty.
         old_hash = device.auth_token_hash
         if old_hash:
-            legacy = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash))
+            legacy = db.scalar(
+                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash)
+            )
             if legacy is None:
                 legacy = DeviceAuthToken(
                     device_id=device.id,
@@ -622,6 +627,8 @@ def restore_device(
         restored_at=now,
         device_token=new_token,
     )
+
+
 @router.post(
     "/admin/devices/{device_id}/revoke-token",
     response_model=RevokeDeviceTokenResponse,
@@ -668,7 +675,9 @@ def revoke_device_token(
     else:
         # Compatibility: if token history is empty, capture + revoke the legacy active hash.
         if old_hash:
-            legacy = db.scalar(select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash))
+            legacy = db.scalar(
+                select(DeviceAuthToken).where(DeviceAuthToken.token_hash == old_hash)
+            )
             if legacy is None:
                 legacy = DeviceAuthToken(
                     device_id=device.id,
@@ -705,6 +714,8 @@ def revoke_device_token(
         token_revoked_at=now,
         device_token=new_token,
     )
+
+
 @router.get(
     "/admin/devices/{device_id}/tokens",
     response_model=DeviceTokensListResponse,
@@ -731,7 +742,9 @@ def list_device_tokens(
         items.append(
             DeviceAuthTokenSummary(
                 id=str(t.id),
-                token_hash_prefix=(t.token_hash or "")[:12] if getattr(t, "token_hash", None) else None,
+                token_hash_prefix=(t.token_hash or "")[:12]
+                if getattr(t, "token_hash", None)
+                else None,
                 created_at=t.created_at,
                 revoked_at=t.revoked_at,
                 last_used_at=t.last_used_at,
@@ -741,6 +754,7 @@ def list_device_tokens(
         )
 
     return DeviceTokensListResponse(device_id=str(device.id), items=items)
+
 
 @router.get(
     "/admin/devices/{device_id}/debug",
@@ -1008,9 +1022,6 @@ def list_device_runs(
         offset=offset,
         total=int(total),
     )
-
-
-
 
 
 @router.get(
@@ -1301,7 +1312,6 @@ def list_devices(
             .over(partition_by=Run.device_id, order_by=(Run.started_at.desc(), Run.id.desc()))
             .label("apply_rn"),
         )
-        .where(Run.kind == RunKind.apply)
     ).subquery()
 
     stmt = select(Device, runs_any_ranked, runs_apply_ranked)
@@ -1373,7 +1383,7 @@ def list_devices(
         # frequent heartbeats do not mask stale policy application.
         apply_started_at: datetime | None = m.get("apply_started_at")
         apply_ended_at: datetime | None = m.get("apply_ended_at")
-        apply_run_at: datetime | None = (apply_ended_at or apply_started_at)
+        apply_run_at: datetime | None = apply_ended_at or apply_started_at
         apply_run_status: str | None = _status(m.get("apply_status"))
 
         if include_health or apply_run_at is not None or d.last_seen_at is not None:
@@ -1382,9 +1392,7 @@ def list_devices(
 
             offline = (seen_age_s is None) or (seen_age_s > int(offline_after_seconds))
             stale = (run_age_s is None) or (run_age_s > int(stale_after_seconds))
-            last_run_failed = bool(
-                apply_run_status and apply_run_status.lower() != "succeeded"
-            )
+            last_run_failed = bool(apply_run_status and apply_run_status.lower() != "succeeded")
 
             if offline:
                 health_status = "offline"
