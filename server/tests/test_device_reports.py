@@ -73,3 +73,55 @@ def test_zero_items_succeeded_status(client, db):
     assert run.status == RunStatus.succeeded
     assert run.summary["items_total"] == 0
     assert run.summary["items_failed"] == 0
+
+
+def test_report_idempotency_key_deduplicates_runs(client, db):
+    token = "idem-token"
+    _create_device(db, token)
+
+    payload = {
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "succeeded",
+        "items": [],
+        "summary": {},
+        "idempotency_key": "report-123",
+    }
+
+    first = _post_report(client, token, payload)
+    second = _post_report(client, token, payload)
+
+    assert first["run_id"] == second["run_id"]
+
+    runs = db.scalars(select(Run)).all()
+    assert len(runs) == 1
+    assert runs[0].idempotency_key == "report-123"
+
+
+def test_report_idempotency_key_preserves_original_run(client, db):
+    token = "idem-preserve"
+    _create_device(db, token)
+
+    payload = {
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "succeeded",
+        "items": [],
+        "summary": {"custom": "first"},
+        "idempotency_key": "report-456",
+    }
+
+    first = _post_report(client, token, payload)
+
+    second_payload = {
+        **payload,
+        "summary": {"custom": "second"},
+        "status": "failed",
+    }
+
+    second = _post_report(client, token, second_payload)
+
+    assert first["run_id"] == second["run_id"]
+
+    run = db.scalar(select(Run))
+    assert run is not None
+    assert run.summary.get("custom") == "first"
+    assert run.status == RunStatus.succeeded

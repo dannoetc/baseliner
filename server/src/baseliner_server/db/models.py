@@ -402,6 +402,7 @@ class Run(Base):
     )
 
     agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # Correlation id for tracing agent/server activity (propagated from X-Correlation-ID)
     correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -425,6 +426,9 @@ class Run(Base):
         Index("ix_runs_device_id_started_at", "device_id", "started_at"),
         Index("ix_runs_device_id_kind_started_at", "device_id", "kind", "started_at"),
         Index("ix_runs_correlation_id", "correlation_id"),
+        UniqueConstraint(
+            "device_id", "idempotency_key", name="uq_runs_device_id_idempotency_key"
+        ),
     )
 
 

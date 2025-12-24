@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ReportRunItem(BaseModel):
@@ -41,6 +41,11 @@ class SubmitReportRequest(BaseModel):
         default="apply",
         description="Run kind for health/reporting: apply | heartbeat",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        alias="report_id",
+        description="Optional key to deduplicate repeated submissions for the same device",
+    )
     ended_at: datetime | None = None
     status: str = "running"
     agent_version: str | None = None
@@ -52,6 +57,9 @@ class SubmitReportRequest(BaseModel):
 
     items: list[ReportRunItem] = Field(default_factory=list)
     logs: list[ReportLogEvent] = Field(default_factory=list)
+
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class SubmitReportResponse(BaseModel):
