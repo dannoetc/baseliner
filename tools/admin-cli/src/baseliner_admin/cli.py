@@ -1397,6 +1397,44 @@ def tenants_create(
         return
     console.print_json(data=payload)
 
+@tenants_app.command("update")
+def tenants_update(
+    ctx: typer.Context,
+    tenant_id: str = typer.Argument(..., help="Tenant id"),
+    name: str | None = typer.Option(None, "--name", help="Rename tenant"),
+    is_active: bool | None = typer.Option(
+        None,
+        "--active/--inactive",
+        help="Set tenant active/inactive",
+    ),
+) -> None:
+    """Update a tenant (superadmin-only)."""
+    client = _client(ctx)
+    console = _console()
+
+    payload: dict[str, object] = {}
+    if name is not None:
+        payload["name"] = name
+    if is_active is not None:
+        payload["is_active"] = is_active
+
+    if not payload:
+        console.print("[yellow]Nothing to update.[/yellow] (use --name and/or --active/--inactive)")
+        raise typer.Exit(code=0)
+
+    try:
+        resp = client.tenants_update(tenant_id=tenant_id, name=name, is_active=is_active)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if (ctx.obj or {}).get("json"):
+        console.print(BaselinerAdminClient.pretty_json(resp))
+        return
+
+    tenant = (resp or {}).get("tenant") or {}
+    console.print(f"Updated tenant {tenant.get('id')}: name={tenant.get('name')} active={tenant.get('is_active')}")
+
 
 @tenants_app.command("keys-issue")
 def tenants_keys_issue(

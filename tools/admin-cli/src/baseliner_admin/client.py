@@ -225,6 +225,22 @@ class BaselinerAdminClient:
             json_body={"name": str(name), "is_active": bool(is_active)},
         )
 
+
+def tenants_update(
+    self,
+    *,
+    tenant_id: str,
+    name: str | None = None,
+    is_active: bool | None = None,
+) -> Any:
+    payload: dict[str, Any] = {}
+    if name is not None:
+        payload["name"] = str(name)
+    if is_active is not None:
+        payload["is_active"] = bool(is_active)
+    return self.request("PATCH", f"/api/v1/admin/tenants/{tenant_id}", json_body=payload)
+
+
     def admin_keys_issue(
         self,
         *,
