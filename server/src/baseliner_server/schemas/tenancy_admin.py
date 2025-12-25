@@ -53,3 +53,15 @@ class IssueAdminKeyResponse(BaseModel):
 
 class AdminKeysListResponse(BaseModel):
     items: list[AdminKeySummary]
+
+class WhoAmIKey(BaseModel):
+    id: str
+    tenant_id: str
+    scope: str
+    created_at: datetime
+    note: str | None = None
+
+
+class WhoAmIResponse(BaseModel):
+    tenant_id: str
+    admin_key: WhoAmIKey

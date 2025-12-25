@@ -60,7 +60,7 @@ def main_callback(
         help="Baseliner admin key",
     ),
     tenant_id: str = typer.Option(
-        DEFAULT_TENANT_ID,
+        None,
         "--tenant-id",
         envvar="BASELINER_TENANT_ID",
         help="Tenant id for the admin key (required by the server)",
@@ -71,8 +71,8 @@ def main_callback(
         raise typer.BadParameter("Server URL required (set BASELINER_SERVER_URL or --server)")
     if not admin_key:
         raise typer.BadParameter("Admin key required (set BASELINER_ADMIN_KEY or --admin-key)")
-    if not tenant_id:
-        raise typer.BadParameter("Tenant id required (set BASELINER_TENANT_ID or --tenant-id)")
+
+    tenant_id = tenant_id or DEFAULT_TENANT_ID
 
     ctx.obj = {
         "server_url": server_url,
@@ -97,6 +97,30 @@ def _console() -> Console:
     # If output is redirected, avoid rich's color codes.
     no_color = not os.isatty(1)
     return Console(no_color=no_color)
+
+@app.command("whoami")
+def whoami(ctx: typer.Context) -> None:
+    """Show the resolved tenant + admin identity (debug helper)."""
+    client = _client(ctx)
+    console = _console()
+    try:
+        payload = client.whoami()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if (ctx.obj or {}).get("json"):
+        console.print(BaselinerAdminClient.pretty_json(payload))
+        return
+
+    tenant_id = str(payload.get("tenant_id") or "")
+    ak = payload.get("admin_key") or {}
+    console.print(f"Tenant: {tenant_id}")
+    console.print(f"Admin key id: {ak.get('id')}")
+    console.print(f"Scope: {ak.get('scope')}")
+    note = ak.get("note")
+    if note:
+        console.print(f"Note: {note}")
 
 
 def _resolve_device_id(

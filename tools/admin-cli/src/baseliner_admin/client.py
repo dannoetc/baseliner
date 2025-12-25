@@ -95,7 +95,12 @@ class BaselinerAdminClient:
     def pretty_json(obj: Any) -> str:
         return json.dumps(obj, indent=2, sort_keys=True, default=str)
 
-    # ---- Admin helpers ----
+    
+def whoami(self) -> Any:
+    return self.request("GET", "/api/v1/admin/whoami")
+
+
+# ---- Admin helpers ----
 
     def devices_list(
         self, *, limit: int = 50, offset: int = 0, include_deleted: bool = False

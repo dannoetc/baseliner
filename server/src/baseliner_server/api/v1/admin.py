@@ -87,6 +87,8 @@ from baseliner_server.schemas.tenancy_admin import (
     IssueAdminKeyResponse,
     TenantSummary,
     TenantsListResponse,
+    WhoAmIKey,
+    WhoAmIResponse,
 )
 from baseliner_server.services.audit import emit_admin_audit
 from baseliner_server.services.policy_compiler import compile_effective_policy
@@ -145,6 +147,40 @@ def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
 
     return None
 
+
+# ---------------------------------------------------------------------------
+# Introspection / auth debugging
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/admin/whoami",
+    response_model=WhoAmIResponse,
+    dependencies=[Depends(require_admin)],
+)
+def whoami(
+    request: Request,
+    admin_key: AdminKey = Depends(require_admin_scope(AdminScope.tenant_admin)),
+    tenant_ctx: TenantContext = Depends(get_tenant_context),
+) -> WhoAmIResponse:
+    """Return the resolved tenant + admin key identity.
+
+    Useful for debugging headers (X-Admin-Key / X-Tenant-ID) and scope enforcement.
+    """
+
+    scope_val = getattr(admin_key, "scope", AdminScope.tenant_admin)
+    scope = scope_val.value if hasattr(scope_val, "value") else str(scope_val)
+
+    return WhoAmIResponse(
+        tenant_id=str(getattr(tenant_ctx, "id", None) or getattr(admin_key, "tenant_id", "")),
+        admin_key=WhoAmIKey(
+            id=str(getattr(admin_key, "id", "")),
+            tenant_id=str(getattr(admin_key, "tenant_id", "")),
+            scope=scope,
+            created_at=getattr(admin_key, "created_at", utcnow()),
+            note=getattr(admin_key, "note", None),
+        ),
+    )
 
 # ---------------------------------------------------------------------------
 # Tenant lifecycle (superadmin-only)
