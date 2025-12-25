@@ -19,9 +19,23 @@ depends_on = None
 
 
 def _swap_unique_constraint(table_name: str, old_name: str, new_name: str, columns: list[str]):
-    with op.batch_alter_table(table_name, recreate="always") as batch_op:
-        batch_op.drop_constraint(old_name, type_="unique")
-        batch_op.create_unique_constraint(new_name, columns)
+    """
+    Replace a unique constraint with a new one, using batch mode on SQLite only.
+
+    Batch recreation on PostgreSQL attempts to drop primary keys (breaking FKs),
+    so we only use batch_alter_table when the SQLite dialect requires it.
+    """
+
+    dialect_name = op.get_bind().dialect.name
+
+    if dialect_name == "sqlite":
+        # SQLite needs table recreation to add/drop constraints
+        with op.batch_alter_table(table_name, recreate="always") as batch_op:
+            batch_op.drop_constraint(old_name, type_="unique")
+            batch_op.create_unique_constraint(new_name, columns)
+    else:
+        op.drop_constraint(old_name, table_name=table_name, type_="unique")
+        op.create_unique_constraint(new_name, table_name=table_name, columns=columns)
 
 
 def upgrade() -> None:
