@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 
 from baseliner_server import __version__
-
 from baseliner_server.api.v1.router import router as v1_router
 from baseliner_server.core.config import settings
 from baseliner_server.middleware.correlation import CorrelationIdMiddleware
@@ -9,6 +8,31 @@ from baseliner_server.middleware.rate_limit import InMemoryRateLimiter, RateLimi
 from baseliner_server.middleware.request_size import RequestSizeLimitMiddleware, RequestSizeLimits
 
 app = FastAPI(title="Baseliner API", version=__version__)
+
+
+@app.on_event("startup")
+def _bootstrap_db_state() -> None:
+    """Best-effort bootstrapping for dev/prod.
+
+    We keep these lightweight and idempotent so a fresh deployment behaves predictably:
+      - ensure the default tenant exists
+      - ensure a bootstrap admin key row exists for DEFAULT_TENANT_ID
+    """
+
+    from baseliner_server.core.bootstrap import ensure_bootstrap_admin_key
+    from baseliner_server.core.tenancy import ensure_default_tenant
+    from baseliner_server.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        ensure_default_tenant(db)
+        ensure_bootstrap_admin_key(db)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
 
 # --- Request hardening (Issue #23) ---
 # Configurable via env vars (see `baseliner_server.core.config.Settings`).

@@ -208,6 +208,36 @@ class BaselinerAdminClient:
             params["target_id"] = target_id
         return self.request("GET", "/api/v1/admin/audit", params=params)
 
+    # ---- Tenant lifecycle (superadmin-only) ----
+
+    def tenants_list(self) -> Any:
+        return self.request("GET", "/api/v1/admin/tenants")
+
+    def tenants_create(self, *, name: str, is_active: bool = True) -> Any:
+        return self.request(
+            "POST",
+            "/api/v1/admin/tenants",
+            json_body={"name": str(name), "is_active": bool(is_active)},
+        )
+
+    def admin_keys_issue(
+        self,
+        *,
+        tenant_id: str,
+        scope: str = "tenant_admin",
+        note: str | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"scope": scope}
+        if note:
+            payload["note"] = note
+        return self.request("POST", f"/api/v1/admin/tenants/{tenant_id}/admin-keys", json_body=payload)
+
+    def admin_keys_list(self, *, tenant_id: str) -> Any:
+        return self.request("GET", f"/api/v1/admin/tenants/{tenant_id}/admin-keys")
+
+    def admin_keys_revoke(self, *, tenant_id: str, key_id: str) -> Any:
+        return self.request("DELETE", f"/api/v1/admin/tenants/{tenant_id}/admin-keys/{key_id}")
+
 
     def enroll_token_create(
         self,

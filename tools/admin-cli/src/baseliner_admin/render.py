@@ -373,3 +373,43 @@ def render_run_detail(
             str(lg.get("run_item_id") or ""),
         )
     console.print(t_logs)
+
+
+def render_tenants_list(console: Console, payload: dict[str, Any], *, title: str = "Tenants") -> None:
+    items = payload.get("items") or []
+    t = Table(title=title)
+    t.add_column("id", overflow="fold")
+    t.add_column("name")
+    t.add_column("active")
+    t.add_column("created_at", overflow="fold")
+
+    for it in items:
+        t.add_row(
+            str(it.get("id") or ""),
+            str(it.get("name") or ""),
+            "yes" if it.get("is_active") else "no",
+            str(it.get("created_at") or ""),
+        )
+    console.print(t)
+
+
+def render_admin_keys_list(
+    console: Console, payload: dict[str, Any], *, title: str = "Admin keys"
+) -> None:
+    items = payload.get("items") or []
+    t = Table(title=title)
+    t.add_column("id", overflow="fold")
+    t.add_column("tenant_id", overflow="fold")
+    t.add_column("scope")
+    t.add_column("created_at", overflow="fold")
+    t.add_column("note", overflow="fold")
+
+    for it in items:
+        t.add_row(
+            str(it.get("id") or ""),
+            str(it.get("tenant_id") or ""),
+            str(it.get("scope") or ""),
+            str(it.get("created_at") or ""),
+            _trunc(str(it.get("note") or ""), 80),
+        )
+    console.print(t)

@@ -13,6 +13,7 @@ from baseliner_admin.client import (
     ClientConfig,
 )
 from baseliner_admin.render import (
+    render_admin_keys_list,
     render_assignments_list,
     render_assignments_plan,
     render_devices_list,
@@ -22,6 +23,7 @@ from baseliner_admin.render import (
     render_policies_list,
     render_run_detail,
     render_runs_list,
+    render_tenants_list,
 )
 from baseliner_admin.tui import die_tui_not_supported, run_tui
 from baseliner_admin.util import read_json_file, try_parse_uuid
@@ -32,12 +34,14 @@ runs_app = typer.Typer(add_completion=False, help="Run inspection")
 policies_app = typer.Typer(add_completion=False, help="Policy administration")
 assignments_app = typer.Typer(add_completion=False, help="Policy assignment management")
 enroll_app = typer.Typer(add_completion=False, help="Enrollment token management")
+tenants_app = typer.Typer(add_completion=False, help="Tenant lifecycle (superadmin)")
 
 app.add_typer(devices_app, name="devices")
 app.add_typer(runs_app, name="runs")
 app.add_typer(policies_app, name="policies")
 app.add_typer(assignments_app, name="assignments")
 app.add_typer(enroll_app, name="enroll")
+app.add_typer(tenants_app, name="tenants")
 
 
 @app.callback()
@@ -1337,6 +1341,92 @@ def assignments_clear(
         return
 
     console.print_json(data=payload)
+
+
+# ---------------------------------------------------------------------------
+# Tenants (superadmin-only)
+# ---------------------------------------------------------------------------
+
+
+@tenants_app.command("list")
+def tenants_list(ctx: typer.Context) -> None:
+    c = _client(ctx)
+    console = _console()
+    payload = c.tenants_list()
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    render_tenants_list(console, payload)
+
+
+@tenants_app.command("create")
+def tenants_create(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="Tenant name"),
+    active: bool = typer.Option(True, "--active/--inactive", help="Whether the tenant is active"),
+) -> None:
+    c = _client(ctx)
+    console = _console()
+    payload = c.tenants_create(name=name, is_active=active)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    console.print_json(data=payload)
+
+
+@tenants_app.command("keys-issue")
+def tenants_keys_issue(
+    ctx: typer.Context,
+    tenant_id: str = typer.Argument(..., help="Tenant UUID"),
+    scope: str = typer.Option("tenant_admin", "--scope", help="superadmin or tenant_admin"),
+    note: str | None = typer.Option(None, "--note", help="Optional note"),
+) -> None:
+    c = _client(ctx)
+    console = _console()
+    payload = c.admin_keys_issue(tenant_id=tenant_id, scope=scope, note=note)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+
+    # Highlight the one-time raw key.
+    raw_key = payload.get("admin_key")
+    console.print(f"[bold]ADMIN KEY (one-time):[/bold] {raw_key}")
+    console.print_json(data={k: v for (k, v) in payload.items() if k != "admin_key"})
+
+
+@tenants_app.command("keys-list")
+def tenants_keys_list(
+    ctx: typer.Context,
+    tenant_id: str = typer.Argument(..., help="Tenant UUID"),
+) -> None:
+    c = _client(ctx)
+    console = _console()
+    payload = c.admin_keys_list(tenant_id=tenant_id)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    render_admin_keys_list(console, payload)
+
+
+@tenants_app.command("keys-revoke")
+def tenants_keys_revoke(
+    ctx: typer.Context,
+    tenant_id: str = typer.Argument(..., help="Tenant UUID"),
+    key_id: str = typer.Argument(..., help="Admin key UUID"),
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
+) -> None:
+    c = _client(ctx)
+    console = _console()
+
+    if not yes:
+        if not typer.confirm(f"Revoke admin key {key_id} for tenant {tenant_id}?", default=False):
+            raise typer.Exit(code=2)
+
+    c.admin_keys_revoke(tenant_id=tenant_id, key_id=key_id)
+    if ctx.obj.get("json"):
+        print("{}")
+        return
+    console.print("ok")
 
 
 def main() -> None:

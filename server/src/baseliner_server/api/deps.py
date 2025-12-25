@@ -16,7 +16,7 @@ from baseliner_server.core.tenancy import (
     ensure_default_tenant,
     get_tenant_context,
 )
-from baseliner_server.db.models import AdminKey, Device, DeviceAuthToken, DeviceStatus, Tenant
+from baseliner_server.db.models import AdminKey, AdminScope, Device, DeviceAuthToken, DeviceStatus, Tenant
 from baseliner_server.db.session import SessionLocal
 
 
@@ -151,6 +151,31 @@ def get_admin_key(
 
 def require_admin(_: AdminKey = Depends(get_admin_key)) -> None:
     return None
+
+
+def require_admin_scope(required: AdminScope):
+    """Require at least the given admin scope.
+
+    Scope ordering (higher can do lower):
+      - superadmin >= tenant_admin
+    """
+
+    allowed: dict[AdminScope, set[AdminScope]] = {
+        AdminScope.superadmin: {AdminScope.superadmin},
+        AdminScope.tenant_admin: {AdminScope.tenant_admin, AdminScope.superadmin},
+    }
+
+    def _dep(admin_key: AdminKey = Depends(get_admin_key)) -> AdminKey:
+        scope_val = getattr(admin_key, "scope", AdminScope.tenant_admin)
+        scope = scope_val if isinstance(scope_val, AdminScope) else AdminScope(str(scope_val))
+        if scope not in allowed.get(required, {required}):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient admin scope",
+            )
+        return admin_key
+
+    return _dep
 
 
 def require_admin_actor(admin_key: AdminKey = Depends(get_admin_key)) -> str:

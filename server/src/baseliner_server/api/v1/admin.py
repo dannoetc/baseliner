@@ -9,8 +9,11 @@ from starlette.requests import Request
 
 from baseliner_server.api.deps import (
     get_scoped_session,
+    get_db,
+    hash_admin_key,
     hash_token,
     require_admin,
+    require_admin_scope,
     require_admin_actor,
 )
 from baseliner_server.core.tenancy import TenantContext, TenantScopedSession, get_tenant_context
@@ -19,6 +22,8 @@ from baseliner_server.core.policy_validation import (
     validate_and_normalize_document,
 )
 from baseliner_server.db.models import (
+    AdminKey,
+    AdminScope,
     AssignmentMode,
     AuditLog,
     Device,
@@ -30,6 +35,7 @@ from baseliner_server.db.models import (
     PolicyAssignment,
     Run,
     RunItem,
+    Tenant,
 )
 from baseliner_server.services.device_tokens import rotate_device_token
 from baseliner_server.schemas.admin import (
@@ -72,6 +78,16 @@ from baseliner_server.schemas.policy_admin import (
     UpsertPolicyResponse,
 )
 from baseliner_server.schemas.run_detail import LogEventDetail, RunDetailResponse, RunItemDetail
+from baseliner_server.schemas.tenancy_admin import (
+    AdminKeySummary,
+    AdminKeysListResponse,
+    CreateTenantRequest,
+    CreateTenantResponse,
+    IssueAdminKeyRequest,
+    IssueAdminKeyResponse,
+    TenantSummary,
+    TenantsListResponse,
+)
 from baseliner_server.services.audit import emit_admin_audit
 from baseliner_server.services.policy_compiler import compile_effective_policy
 
@@ -127,6 +143,203 @@ def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
         except Exception:
             continue
 
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tenant lifecycle (superadmin-only)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/admin/tenants",
+    response_model=CreateTenantResponse,
+    dependencies=[Depends(require_admin_scope(AdminScope.superadmin))],
+)
+def create_tenant(
+    request: Request,
+    payload: CreateTenantRequest,
+    admin_actor: str = Depends(require_admin_actor),
+    db=Depends(get_db),
+) -> CreateTenantResponse:
+    """Create a tenant.
+
+    MVP: name + active flag. Future: slugs, metadata, rotations, etc.
+    """
+
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Tenant name required")
+
+    tenant = Tenant(
+        id=uuid.uuid4(),
+        name=name,
+        created_at=utcnow(),
+        is_active=bool(payload.is_active),
+    )
+    db.add(tenant)
+    db.flush()
+
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant.id,
+        actor_id=admin_actor,
+        action="tenant.create",
+        target_type="tenant",
+        target_id=str(tenant.id),
+        data={"name": tenant.name, "is_active": tenant.is_active},
+    )
+    db.commit()
+
+    return CreateTenantResponse(
+        tenant=TenantSummary(
+            id=str(tenant.id),
+            name=tenant.name,
+            created_at=tenant.created_at,
+            is_active=tenant.is_active,
+        )
+    )
+
+
+@router.get(
+    "/admin/tenants",
+    response_model=TenantsListResponse,
+    dependencies=[Depends(require_admin_scope(AdminScope.superadmin))],
+)
+def list_tenants(
+    db=Depends(get_db),
+) -> TenantsListResponse:
+    rows = db.scalars(select(Tenant).order_by(Tenant.created_at.asc())).all()
+    return TenantsListResponse(
+        items=[
+            TenantSummary(
+                id=str(t.id),
+                name=t.name,
+                created_at=t.created_at,
+                is_active=t.is_active,
+            )
+            for t in rows
+        ]
+    )
+
+
+@router.post(
+    "/admin/tenants/{tenant_id}/admin-keys",
+    response_model=IssueAdminKeyResponse,
+    dependencies=[Depends(require_admin_scope(AdminScope.superadmin))],
+)
+def issue_admin_key(
+    request: Request,
+    payload: IssueAdminKeyRequest,
+    tenant_id: uuid.UUID = Path(..., description="Tenant UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db=Depends(get_db),
+) -> IssueAdminKeyResponse:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Validate scope string -> enum
+    raw_scope = (payload.scope or "tenant_admin").strip().lower()
+    try:
+        scope = AdminScope(raw_scope)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid scope")
+
+    raw = secrets.token_urlsafe(32)
+    key_row = AdminKey(
+        tenant_id=tenant_id,
+        key_hash=hash_admin_key(raw),
+        scope=scope,
+        created_at=utcnow(),
+        note=(payload.note or None),
+    )
+    db.add(key_row)
+    db.flush()
+
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant_id,
+        actor_id=admin_actor,
+        action="admin_key.issue",
+        target_type="admin_key",
+        target_id=str(key_row.id),
+        data={"scope": scope.value, "note": payload.note},
+    )
+    db.commit()
+
+    return IssueAdminKeyResponse(
+        key_id=str(key_row.id),
+        tenant_id=str(tenant_id),
+        scope=scope.value,
+        created_at=key_row.created_at,
+        note=key_row.note,
+        admin_key=raw,
+    )
+
+
+@router.get(
+    "/admin/tenants/{tenant_id}/admin-keys",
+    response_model=AdminKeysListResponse,
+    dependencies=[Depends(require_admin_scope(AdminScope.superadmin))],
+)
+def list_admin_keys(
+    tenant_id: uuid.UUID = Path(..., description="Tenant UUID"),
+    db=Depends(get_db),
+) -> AdminKeysListResponse:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    rows = db.scalars(
+        select(AdminKey).where(AdminKey.tenant_id == tenant_id).order_by(AdminKey.created_at.desc())
+    ).all()
+
+    items: list[AdminKeySummary] = []
+    for r in rows:
+        scope_val = getattr(r.scope, "value", str(r.scope))
+        items.append(
+            AdminKeySummary(
+                id=str(r.id),
+                tenant_id=str(r.tenant_id),
+                scope=str(scope_val),
+                created_at=r.created_at,
+                note=r.note,
+            )
+        )
+    return AdminKeysListResponse(items=items)
+
+
+@router.delete(
+    "/admin/tenants/{tenant_id}/admin-keys/{key_id}",
+    status_code=204,
+    dependencies=[Depends(require_admin_scope(AdminScope.superadmin))],
+)
+def revoke_admin_key(
+    request: Request,
+    tenant_id: uuid.UUID = Path(..., description="Tenant UUID"),
+    key_id: uuid.UUID = Path(..., description="Admin key UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db=Depends(get_db),
+) -> None:
+    row = db.scalar(select(AdminKey).where(AdminKey.id == key_id, AdminKey.tenant_id == tenant_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Admin key not found")
+
+    db.delete(row)
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant_id,
+        actor_id=admin_actor,
+        action="admin_key.revoke",
+        target_type="admin_key",
+        target_id=str(key_id),
+        data={},
+    )
+    db.commit()
     return None
 
 
