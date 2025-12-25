@@ -96,11 +96,11 @@ class BaselinerAdminClient:
         return json.dumps(obj, indent=2, sort_keys=True, default=str)
 
     
-def whoami(self) -> Any:
-    return self.request("GET", "/api/v1/admin/whoami")
+    def whoami(self) -> Any:
+        return self.request("GET", "/api/v1/admin/whoami")
 
 
-# ---- Admin helpers ----
+    # ---- Admin helpers ----
 
     def devices_list(
         self, *, limit: int = 50, offset: int = 0, include_deleted: bool = False
