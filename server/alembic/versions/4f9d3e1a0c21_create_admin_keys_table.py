@@ -19,9 +19,29 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create the enum type used by admin_keys.scope (Postgres)
-    adminscope = sa.Enum("superadmin", "tenant_admin", name="adminscope")
-    adminscope.create(op.get_bind(), checkfirst=True)
+    # IMPORTANT (Postgres):
+    # SQLAlchemy/Alembic will try to CREATE TYPE for Enum columns when the table is created.
+    # To avoid DuplicateObject errors (and to be idempotent), we:
+    #   1) create the enum type via a DO block that ignores "already exists"
+    #   2) use postgresql.ENUM(..., create_type=False) on the column so table creation
+    #      does NOT attempt to create the type again.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            CREATE TYPE adminscope AS ENUM ('superadmin', 'tenant_admin');
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END $$;
+        """
+    )
+
+    adminscope = postgresql.ENUM(
+        "superadmin",
+        "tenant_admin",
+        name="adminscope",
+        create_type=False,
+    )
 
     op.create_table(
         "admin_keys",
@@ -70,5 +90,14 @@ def downgrade() -> None:
     op.drop_index("uq_admin_keys_tenant_id_key_hash", table_name="admin_keys")
     op.drop_table("admin_keys")
 
-    adminscope = sa.Enum("superadmin", "tenant_admin", name="adminscope")
-    adminscope.drop(op.get_bind(), checkfirst=True)
+    # Drop enum type if it exists (Postgres)
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            DROP TYPE adminscope;
+        EXCEPTION
+            WHEN undefined_object THEN NULL;
+        END $$;
+        """
+    )
