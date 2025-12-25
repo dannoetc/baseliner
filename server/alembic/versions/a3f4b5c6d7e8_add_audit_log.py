@@ -11,6 +11,11 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+
+JSON_COL = sa.JSON().with_variant(
+    postgresql.JSONB(astext_type=sa.Text()),
+    "postgresql",
+)
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -34,7 +39,7 @@ def upgrade() -> None:
         sa.Column("request_path", sa.String(length=255), nullable=True),
         sa.Column("correlation_id", sa.String(length=128), nullable=True),
         sa.Column("remote_addr", sa.String(length=64), nullable=True),
-        sa.Column("data", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("data", JSON_COL, nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
 

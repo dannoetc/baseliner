@@ -11,6 +11,11 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+
+JSON_COL = sa.JSON().with_variant(
+    postgresql.JSONB(astext_type=sa.Text()),
+    "postgresql",
+)
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -31,7 +36,7 @@ def upgrade() -> None:
         sa.Column("os_version", sa.String(length=128), nullable=True),
         sa.Column("arch", sa.String(length=32), nullable=True),
         sa.Column("agent_version", sa.String(length=64), nullable=True),
-        sa.Column("tags", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("tags", JSON_COL, nullable=False),
         sa.Column("enrolled_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("auth_token_hash", sa.String(length=255), nullable=False),
@@ -45,7 +50,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=200), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("schema_version", sa.String(length=32), nullable=False),
-        sa.Column("document", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("document", JSON_COL, nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -98,8 +103,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("agent_version", sa.String(length=64), nullable=True),
-        sa.Column("policy_snapshot", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("summary", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("policy_snapshot", JSON_COL, nullable=False),
+        sa.Column("summary", JSON_COL, nullable=False),
         sa.ForeignKeyConstraint(["device_id"], ["devices.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -135,8 +140,8 @@ def upgrade() -> None:
         ),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("evidence", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("error", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("evidence", JSON_COL, nullable=False),
+        sa.Column("error", JSON_COL, nullable=False),
         sa.ForeignKeyConstraint(["run_id"], ["runs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -154,7 +159,7 @@ def upgrade() -> None:
             "level", sa.Enum("debug", "info", "warning", "error", name="loglevel"), nullable=False
         ),
         sa.Column("message", sa.Text(), nullable=False),
-        sa.Column("data", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("data", JSON_COL, nullable=False),
         sa.ForeignKeyConstraint(["run_id"], ["runs.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_item_id"], ["run_items.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
