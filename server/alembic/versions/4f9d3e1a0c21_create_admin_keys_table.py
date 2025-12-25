@@ -3,13 +3,17 @@
 Revision ID: 4f9d3e1a0c21
 Revises: 2c7b6c4f2ad1
 Create Date: 2025-12-24
+
+SQLite compatibility notes:
+- SQLite does not support a native UUID type name; use a string variant.
+- SQLite does not have `now()`; use CURRENT_TIMESTAMP.
 """
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+from alembic import op
+
 
 # revision identifiers, used by Alembic.
 revision = "4f9d3e1a0c21"
@@ -20,102 +24,41 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    is_postgres = bind.dialect.name == "postgresql"
-    uuid_t = uuid_t if is_postgres else sa.UUID()
+    dialect = bind.dialect.name
 
-    # IMPORTANT (Postgres):
-    # SQLAlchemy/Alembic will try to CREATE TYPE for Enum columns when the table is created.
-    # To avoid DuplicateObject errors (and to be idempotent), we:
-    #   1) create the enum type via a DO block that ignores "already exists"
-    #   2) use postgresql.ENUM(..., create_type=False) on the column so table creation
-    #      does NOT attempt to create the type again.
-    if is_postgres:
-            op.execute(
-                """
-                DO $$
-                BEGIN
-                    CREATE TYPE adminscope AS ENUM ('superadmin', 'tenant_admin');
-                EXCEPTION
-                    WHEN duplicate_object THEN NULL;
-                END $$;
-                """
-            )
+    UUID_COL = sa.UUID().with_variant(sa.String(36), "sqlite")
 
+    created_at_default = sa.text("CURRENT_TIMESTAMP") if dialect == "sqlite" else sa.text("now()")
 
-    if is_postgres:
-        adminscope = postgresql.ENUM(
-            "superadmin",
-            "tenant_admin",
-            name="adminscope",
-            create_type=False,
-        )
-    else:
-        adminscope = sa.Enum(
-            "superadmin",
-            "tenant_admin",
-            name="adminscope",
-        )
+    adminscope = sa.Enum("superadmin", "tenant_admin", name="adminscope")
 
+    # On PostgreSQL, ensure the ENUM exists; on SQLite it becomes a CHECK constraint.
+    if dialect == "postgresql":
+        adminscope.create(bind, checkfirst=True)
 
     op.create_table(
         "admin_keys",
-        sa.Column("id", uuid_t, primary_key=True, nullable=False),
-        sa.Column(
-            "tenant_id",
-            uuid_t,
-            sa.ForeignKey("tenants.id", ondelete="RESTRICT"),
-            nullable=False,
-        ),
+        sa.Column("id", UUID_COL, nullable=False),
+        sa.Column("tenant_id", UUID_COL, nullable=False),
         sa.Column("key_hash", sa.String(length=255), nullable=False),
-        sa.Column(
-            "scope",
-            adminscope,
-            nullable=False,
-            server_default=sa.text("'tenant_admin'"),
-        ),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
+        sa.Column("scope", adminscope, nullable=False, server_default="tenant_admin"),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=created_at_default),
         sa.Column("note", sa.Text(), nullable=True),
+        sa.PrimaryKeyConstraint("id"),
+        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="RESTRICT"),
+        sa.UniqueConstraint("tenant_id", "key_hash", name="uq_admin_keys_tenant_id_key_hash"),
     )
 
-    # Composite tenant-scoped uniqueness
-    op.create_index(
-        "uq_admin_keys_tenant_id_key_hash",
-        "admin_keys",
-        ["tenant_id", "key_hash"],
-        unique=True,
-    )
-
-    # Helpful lookup index
-    op.create_index(
-        "ix_admin_keys_tenant_id",
-        "admin_keys",
-        ["tenant_id"],
-        unique=False,
-    )
+    op.create_index("ix_admin_keys_tenant_id", "admin_keys", ["tenant_id"], unique=False)
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    is_postgres = bind.dialect.name == "postgresql"
+    dialect = bind.dialect.name
 
     op.drop_index("ix_admin_keys_tenant_id", table_name="admin_keys")
-    op.drop_index("uq_admin_keys_tenant_id_key_hash", table_name="admin_keys")
     op.drop_table("admin_keys")
 
-    # Drop enum type if it exists (Postgres)
-    if is_postgres:
-            op.execute(
-                """
-                DO $$
-                BEGIN
-                    DROP TYPE adminscope;
-                EXCEPTION
-                    WHEN undefined_object THEN NULL;
-                END $$;
-                """
-            )
+    if dialect == "postgresql":
+        adminscope = sa.Enum("superadmin", "tenant_admin", name="adminscope")
+        adminscope.drop(bind, checkfirst=True)
