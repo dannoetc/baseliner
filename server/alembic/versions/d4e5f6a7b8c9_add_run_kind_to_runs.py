@@ -38,7 +38,9 @@ def upgrade() -> None:
     except Exception:
         pass
 
-    op.alter_column("runs", "kind", server_default=None)
+    # SQLite cannot DROP DEFAULT via ALTER COLUMN; leaving the default in place is fine for dev/tests.
+    if bind.dialect.name != "sqlite":
+        op.alter_column("runs", "kind", server_default=None)
 
     op.create_index(
         "ix_runs_device_id_kind_started_at",
