@@ -21,6 +21,7 @@ The CLI reads config from env vars (or flags):
 
 - `BASELINER_SERVER_URL` (example: `http://localhost:8000`)
 - `BASELINER_ADMIN_KEY` (your admin key)
+- `BASELINER_TENANT_ID` (tenant id for the admin key; defaults to the Phase 0 tenant)
 
 ## Examples
 
