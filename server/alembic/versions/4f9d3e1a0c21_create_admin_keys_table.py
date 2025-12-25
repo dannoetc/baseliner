@@ -19,36 +19,50 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    is_postgres = bind.dialect.name == "postgresql"
+    uuid_t = uuid_t if is_postgres else sa.UUID()
+
     # IMPORTANT (Postgres):
     # SQLAlchemy/Alembic will try to CREATE TYPE for Enum columns when the table is created.
     # To avoid DuplicateObject errors (and to be idempotent), we:
     #   1) create the enum type via a DO block that ignores "already exists"
     #   2) use postgresql.ENUM(..., create_type=False) on the column so table creation
     #      does NOT attempt to create the type again.
-    op.execute(
-        """
-        DO $$
-        BEGIN
-            CREATE TYPE adminscope AS ENUM ('superadmin', 'tenant_admin');
-        EXCEPTION
-            WHEN duplicate_object THEN NULL;
-        END $$;
-        """
-    )
+    if is_postgres:
+            op.execute(
+                """
+                DO $$
+                BEGIN
+                    CREATE TYPE adminscope AS ENUM ('superadmin', 'tenant_admin');
+                EXCEPTION
+                    WHEN duplicate_object THEN NULL;
+                END $$;
+                """
+            )
 
-    adminscope = postgresql.ENUM(
-        "superadmin",
-        "tenant_admin",
-        name="adminscope",
-        create_type=False,
-    )
+
+    if is_postgres:
+        adminscope = postgresql.ENUM(
+            "superadmin",
+            "tenant_admin",
+            name="adminscope",
+            create_type=False,
+        )
+    else:
+        adminscope = sa.Enum(
+            "superadmin",
+            "tenant_admin",
+            name="adminscope",
+        )
+
 
     op.create_table(
         "admin_keys",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column("id", uuid_t, primary_key=True, nullable=False),
         sa.Column(
             "tenant_id",
-            postgresql.UUID(as_uuid=True),
+            uuid_t,
             sa.ForeignKey("tenants.id", ondelete="RESTRICT"),
             nullable=False,
         ),
@@ -86,18 +100,22 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    is_postgres = bind.dialect.name == "postgresql"
+
     op.drop_index("ix_admin_keys_tenant_id", table_name="admin_keys")
     op.drop_index("uq_admin_keys_tenant_id_key_hash", table_name="admin_keys")
     op.drop_table("admin_keys")
 
     # Drop enum type if it exists (Postgres)
-    op.execute(
-        """
-        DO $$
-        BEGIN
-            DROP TYPE adminscope;
-        EXCEPTION
-            WHEN undefined_object THEN NULL;
-        END $$;
-        """
-    )
+    if is_postgres:
+            op.execute(
+                """
+                DO $$
+                BEGIN
+                    DROP TYPE adminscope;
+                EXCEPTION
+                    WHEN undefined_object THEN NULL;
+                END $$;
+                """
+            )

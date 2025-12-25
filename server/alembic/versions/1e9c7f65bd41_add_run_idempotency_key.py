@@ -16,14 +16,31 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
     op.add_column("runs", sa.Column("idempotency_key", sa.String(length=128), nullable=True))
-    op.create_unique_constraint(
-        "uq_runs_device_id_idempotency_key", "runs", ["device_id", "idempotency_key"]
-    )
+
+    # SQLite cannot ALTER constraints; represent the uniqueness as a unique index there.
+    if bind.dialect.name == "sqlite":
+        op.create_index(
+            "uq_runs_device_id_idempotency_key",
+            "runs",
+            ["device_id", "idempotency_key"],
+            unique=True,
+        )
+    else:
+        op.create_unique_constraint(
+            "uq_runs_device_id_idempotency_key", "runs", ["device_id", "idempotency_key"]
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "uq_runs_device_id_idempotency_key", table_name="runs", type_="unique"
-    )
+    bind = op.get_bind()
+
+    if bind.dialect.name == "sqlite":
+        op.drop_index("uq_runs_device_id_idempotency_key", table_name="runs")
+    else:
+        op.drop_constraint(
+            "uq_runs_device_id_idempotency_key", table_name="runs", type_="unique"
+        )
+
     op.drop_column("runs", "idempotency_key")

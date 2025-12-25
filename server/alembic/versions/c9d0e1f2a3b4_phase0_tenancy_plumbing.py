@@ -26,6 +26,9 @@ DEFAULT_TENANT_NAME = "default"
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == "sqlite"
+
     # 1) Tenants table
     op.create_table(
         "tenants",
@@ -78,22 +81,22 @@ def upgrade() -> None:
     for table_name, _, _ in tables:
         op.execute(
             sa.text(f"UPDATE {table_name} SET tenant_id = :tid WHERE tenant_id IS NULL").bindparams(
-                sa.bindparam("tid", value=DEFAULT_TENANT_ID, type_=sa.UUID())
+                sa.bindparam("tid", value=str(DEFAULT_TENANT_ID))
             )
         )
 
-    # Enforce NOT NULL + add FKs.
-    for table_name, _, _ in tables:
-        op.alter_column(table_name, "tenant_id", existing_type=sa.UUID(), nullable=False)
-        op.create_foreign_key(
-            f"fk_{table_name}_tenant_id",
-            table_name,
-            "tenants",
-            ["tenant_id"],
-            ["id"],
-            ondelete="RESTRICT",
-        )
-
+    # Enforce NOT NULL + add FKs (Postgres). SQLite cannot ALTER columns or add FKs post-hoc.
+    if not is_sqlite:
+        for table_name, _, _ in tables:
+            op.alter_column(table_name, "tenant_id", existing_type=sa.UUID(), nullable=False)
+            op.create_foreign_key(
+                f"fk_{table_name}_tenant_id",
+                table_name,
+                "tenants",
+                ["tenant_id"],
+                ["id"],
+                ondelete="RESTRICT",
+            )
 
 def downgrade() -> None:
     # Drop FKs + columns in reverse dependency order.
