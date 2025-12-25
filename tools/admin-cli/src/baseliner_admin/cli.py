@@ -7,7 +7,11 @@ from typing import Any
 import typer
 from rich.console import Console
 
-from baseliner_admin.client import BaselinerAdminClient, ClientConfig
+from baseliner_admin.client import (
+    DEFAULT_TENANT_ID,
+    BaselinerAdminClient,
+    ClientConfig,
+)
 from baseliner_admin.render import (
     render_assignments_list,
     render_assignments_plan,
@@ -51,16 +55,25 @@ def main_callback(
         envvar="BASELINER_ADMIN_KEY",
         help="Baseliner admin key",
     ),
+    tenant_id: str = typer.Option(
+        DEFAULT_TENANT_ID,
+        "--tenant-id",
+        envvar="BASELINER_TENANT_ID",
+        help="Tenant id for the admin key (required by the server)",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     if not server_url:
         raise typer.BadParameter("Server URL required (set BASELINER_SERVER_URL or --server)")
     if not admin_key:
         raise typer.BadParameter("Admin key required (set BASELINER_ADMIN_KEY or --admin-key)")
+    if not tenant_id:
+        raise typer.BadParameter("Tenant id required (set BASELINER_TENANT_ID or --tenant-id)")
 
     ctx.obj = {
         "server_url": server_url,
         "admin_key": admin_key,
+        "tenant_id": tenant_id,
         "json": bool(json_out),
     }
 
@@ -71,6 +84,7 @@ def _client(ctx: typer.Context) -> BaselinerAdminClient:
         ClientConfig(
             server=o["server_url"],
             admin_key=o["admin_key"],
+            tenant_id=o["tenant_id"],
         )
     )
 

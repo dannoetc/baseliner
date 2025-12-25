@@ -7,6 +7,9 @@ from typing import Any, Mapping
 import httpx
 
 
+DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
+
 class ApiError(RuntimeError):
     def __init__(self, status_code: int, detail: Any):
         self.status_code = status_code
@@ -18,6 +21,7 @@ class ApiError(RuntimeError):
 class ClientConfig:
     server: str
     admin_key: str
+    tenant_id: str
     timeout_s: float = 15.0
 
 
@@ -29,12 +33,14 @@ class BaselinerAdminClient:
         # Back-compat for older call sites.
         base_url: str | None = None,
         admin_key: str | None = None,
+        tenant_id: str | None = None,
         timeout_s: float = 15.0,
     ):
         if cfg is None:
             cfg = ClientConfig(
                 server=str(base_url or ""),
                 admin_key=str(admin_key or ""),
+                tenant_id=str(tenant_id or DEFAULT_TENANT_ID),
                 timeout_s=float(timeout_s),
             )
 
@@ -43,6 +49,8 @@ class BaselinerAdminClient:
             raise ValueError("server is required")
         if not cfg.admin_key:
             raise ValueError("admin_key is required")
+        if not cfg.tenant_id:
+            raise ValueError("tenant_id is required")
 
         self.cfg = cfg
         self._client = httpx.Client(
@@ -50,6 +58,7 @@ class BaselinerAdminClient:
             timeout=cfg.timeout_s,
             headers={
                 "X-Admin-Key": cfg.admin_key,
+                "X-Tenant-ID": cfg.tenant_id,
                 "Accept": "application/json",
                 "User-Agent": "baseliner-admin-cli",
             },
