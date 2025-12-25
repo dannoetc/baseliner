@@ -39,7 +39,9 @@ def upgrade() -> None:
     op.create_index("ix_devices_token_revoked_at", "devices", ["token_revoked_at"])
 
     # Avoid leaving a persistent default on the column.
-    op.alter_column("devices", "status", server_default=None)
+    # SQLite cannot DROP DEFAULT via ALTER COLUMN; leaving it is fine for dev/tests.
+    if bind.dialect.name != "sqlite":
+        op.alter_column("devices", "status", server_default=None)
 
 
 def downgrade() -> None:
