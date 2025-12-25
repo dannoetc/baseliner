@@ -116,7 +116,7 @@ class Tenant(Base):
     __tablename__ = "tenants"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
@@ -148,7 +148,7 @@ class Device(Base):
 
 
     # Agent-provided stable key (e.g., hash of SMBIOS UUID + serial, etc.)
-    device_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    device_key: Mapped[str] = mapped_column(String(128), nullable=False)
 
     hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
     os: Mapped[str | None] = mapped_column(String(64), nullable=True)  # "windows"
@@ -189,6 +189,7 @@ class Device(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("tenant_id", "device_key", name="uq_devices_tenant_id_device_key"),
         Index("ix_devices_tenant_id", "tenant_id"),
         Index("ix_devices_last_seen_at", "last_seen_at"),
         Index("ix_devices_status", "status"),
@@ -277,13 +278,16 @@ class AdminKey(Base):
 
     tenant: Mapped["Tenant"] = relationship()
 
-    key_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     scope: Mapped[AdminScope] = mapped_column(Enum(AdminScope), nullable=False, default=AdminScope.tenant_admin)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (Index("ix_admin_keys_tenant_id", "tenant_id"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "key_hash", name="uq_admin_keys_tenant_id_key_hash"),
+        Index("ix_admin_keys_tenant_id", "tenant_id"),
+    )
 
 
 class AuditLog(Base):
@@ -334,7 +338,7 @@ class Policy(Base):
     tenant: Mapped["Tenant"] = relationship(back_populates="policies")
 
 
-    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="1.0")
@@ -354,7 +358,10 @@ class Policy(Base):
     )
 
     __table_args__ = (
-        Index("ix_policies_tenant_id", "tenant_id"),Index("ix_policies_is_active", "is_active"),)
+        UniqueConstraint("tenant_id", "name", name="uq_policies_tenant_id_name"),
+        Index("ix_policies_tenant_id", "tenant_id"),
+        Index("ix_policies_is_active", "is_active"),
+    )
 
 
 class PolicyAssignment(Base):
