@@ -68,6 +68,17 @@ def _parse_tenant_id(raw: Optional[str]) -> uuid.UUID:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid tenant id")
 
 
+def _try_parse_tenant_id(raw: Optional[str]) -> uuid.UUID | None:
+    """Parse X-Tenant-ID if present, else return None."""
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid X-Tenant-ID: {e}") from e
+
+
+
 def _get_tenant(db: Session, tenant_id: uuid.UUID) -> Tenant:
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
@@ -90,19 +101,21 @@ def _enforce_tenant_active(tenant: Tenant, *, admin_scope: str) -> None:
 
 
 
+
+
 def get_scoped_session(
     request: Request,
     db: Session = Depends(get_db),
-    authorization: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
     x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
-    tenant_ctx_override: TenantContext = Depends(get_tenant_context),
+    _admin_key: AdminKey | None = Depends(get_admin_key_optional),
 ) -> TenantScopedSession:
     existing = getattr(getattr(request, "state", None), "scoped_session", None)
     if isinstance(existing, TenantScopedSession):
         return existing
 
-    tenant_ctx = tenant_ctx_override or getattr(getattr(request, "state", None), "tenant_context", None)
+    tenant_ctx = get_tenant_context(request) or getattr(getattr(request, "state", None), "tenant_context", None)
     tenant_id: uuid.UUID | None = getattr(tenant_ctx, "id", None)
 
     if authorization and authorization.lower().startswith("bearer "):
@@ -151,38 +164,79 @@ def get_bearer_token(authorization: Optional[str] = Header(default=None)) -> str
     return authorization.split(" ", 1)[1].strip()
 
 
+
+
 def get_admin_key(
     request: Request,
     x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
     db: Session = Depends(get_db),
 ) -> AdminKey:
-    existing = getattr(getattr(request, "state", None), "admin_key", None)
-    if isinstance(existing, AdminKey):
-        return existing
+    """Authenticate an admin key and establish a tenant context for the request.
 
-    if not x_admin_key:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
+    Notes:
+      * Admin key lookup is **not** scoped by X-Tenant-ID (except to disambiguate collisions).
+      * For **tenant_admin** keys, the effective tenant is always the key's tenant.
+        If X-Tenant-ID is provided and differs, we ignore it but expose the mismatch via /admin/whoami.
+      * For **superadmin** keys, X-Tenant-ID selects the effective tenant; if missing we default
+        to DEFAULT_TENANT_ID.
+    """
+    raw_key = x_admin_key or settings.baseliner_admin_key
+    if not raw_key:
+        raise HTTPException(status_code=401, detail="Missing X-Admin-Key")
 
-    tenant_id = _parse_tenant_id(x_tenant_id)
-    tenant = _get_tenant(db, tenant_id)
+    key_hash = hash_admin_key(raw_key)
+    requested_tenant_id = _try_parse_tenant_id(x_tenant_id)
 
-    key_hash = hash_admin_key(x_admin_key)
-    admin_key = db.scalar(
-        select(AdminKey).where(AdminKey.tenant_id == tenant_id, AdminKey.key_hash == key_hash)
-    )
-    if admin_key is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
+    candidates = db.scalars(select(AdminKey).where(AdminKey.key_hash == key_hash)).all()
+    if not candidates:
+        raise HTTPException(status_code=401, detail="Invalid admin key")
 
-    scope_val = getattr(admin_key, "scope", "tenant_admin")
-    scope = str(scope_val.value if hasattr(scope_val, "value") else scope_val)
+    if len(candidates) == 1:
+        admin_key = candidates[0]
+    else:
+        if requested_tenant_id is None:
+            raise HTTPException(status_code=400, detail="Ambiguous admin key; provide X-Tenant-ID")
+        match = next((c for c in candidates if c.tenant_id == requested_tenant_id), None)
+        if match is None:
+            raise HTTPException(status_code=401, detail="Invalid admin key")
+        admin_key = match
 
-    _enforce_tenant_active(tenant, admin_scope=scope)
+    if admin_key.scope == AdminScope.superadmin:
+        effective_tenant_id = requested_tenant_id or DEFAULT_TENANT_ID
+        admin_scope = "superadmin"
+    else:
+        effective_tenant_id = admin_key.tenant_id
+        admin_scope = "tenant_admin"
 
-    ctx = TenantContext(id=tenant_id, admin_scope=scope)
-    request.state.tenant_context = ctx
+    tenant_mismatch = requested_tenant_id is not None and requested_tenant_id != effective_tenant_id
+
+    tenant = _get_tenant(db, effective_tenant_id)
+    _enforce_tenant_active(tenant=tenant, admin_scope=admin_scope)
+
     request.state.admin_key = admin_key
+    request.state.tenant_context = TenantContext(id=effective_tenant_id, admin_scope=admin_scope)
+    request.state.requested_tenant_id = str(requested_tenant_id) if requested_tenant_id else None
+    request.state.effective_tenant_id = str(effective_tenant_id)
+    request.state.tenant_mismatch = tenant_mismatch
+
     return admin_key
+
+
+def get_admin_key_optional(
+    request: Request,
+    x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+) -> AdminKey | None:
+    """Optional variant of get_admin_key.
+
+    Used by get_scoped_session so if an admin key is present, we resolve the tenant
+    context deterministically before choosing a tenant-scoped session.
+    """
+    if not x_admin_key:
+        return None
+    return get_admin_key(request=request, x_admin_key=x_admin_key, x_tenant_id=x_tenant_id, db=db)
 
 
 def require_admin(_: AdminKey = Depends(get_admin_key)) -> None:

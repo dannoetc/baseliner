@@ -8,6 +8,7 @@ from sqlalchemy import and_, desc, func, or_, select
 from starlette.requests import Request
 
 from baseliner_server.api.deps import (
+    get_admin_key,
     get_scoped_session,
     get_db,
     hash_admin_key,
@@ -89,11 +90,12 @@ from baseliner_server.schemas.tenancy_admin import (
     TenantsListResponse,
     UpdateTenantRequest,
     UpdateTenantResponse,
-    WhoAmIKey,
     WhoAmIResponse,
 )
 from baseliner_server.services.audit import emit_admin_audit
 from baseliner_server.services.policy_compiler import compile_effective_policy
+from baseliner_server.core.tenancy import get_tenant_context
+
 
 router = APIRouter(tags=["admin"])
 
@@ -148,43 +150,6 @@ def _summary_int(summary: dict[str, Any], *keys: str) -> int | None:
             continue
 
     return None
-
-
-
-# ---------------------------------------------------------------------------
-# Introspection / auth debugging
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/admin/whoami",
-    response_model=WhoAmIResponse,
-    dependencies=[Depends(require_admin)],
-)
-def whoami(
-    admin_key: AdminKey = Depends(require_admin_scope(AdminScope.tenant_admin)),
-    tenant_ctx: TenantContext = Depends(get_tenant_context),
-) -> WhoAmIResponse:
-    """Return the resolved tenant + admin key identity.
-
-    Useful for debugging headers (X-Admin-Key / X-Tenant-ID) and scope enforcement.
-    """
-
-    scope_val = getattr(admin_key, "scope", AdminScope.tenant_admin)
-    scope = scope_val.value if hasattr(scope_val, "value") else str(scope_val)
-
-    resolved_tid = getattr(tenant_ctx, "id", None) or getattr(admin_key, "tenant_id", "")
-
-    return WhoAmIResponse(
-        tenant_id=str(resolved_tid),
-        admin_key=WhoAmIKey(
-            id=str(getattr(admin_key, "id", "")),
-            tenant_id=str(getattr(admin_key, "tenant_id", "")),
-            scope=scope,
-            created_at=getattr(admin_key, "created_at", datetime.now(timezone.utc)),
-            note=getattr(admin_key, "note", None),
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1955,4 +1920,32 @@ def prune_runs(
         runs_targeted=runs_targeted,
         counts=PruneCounts(runs=deleted_runs, run_items=deleted_items, log_events=deleted_logs),
         notes={"mode": "deleted"},
+    )
+
+@router.get("/admin/whoami", response_model=WhoAmIResponse)
+def whoami(
+    request: Request,
+    admin_key: AdminKey = Depends(get_admin_key),
+) -> WhoAmIResponse:
+    ctx = get_tenant_context(request)
+    requested = getattr(request.state, "requested_tenant_id", None)
+    effective = str(getattr(request.state, "effective_tenant_id", ctx.id))
+    mismatch = bool(getattr(request.state, "tenant_mismatch", False))
+
+    # For older flows (e.g. unit tests) that don't set request.state fields, compute mismatch conservatively.
+    if requested and not mismatch:
+        mismatch = requested != effective
+
+    return WhoAmIResponse(
+        tenant_id=effective,
+        effective_tenant_id=effective,
+        requested_tenant_id=requested,
+        tenant_mismatch=mismatch,
+        admin_key={
+            "id": str(admin_key.id),
+            "tenant_id": str(admin_key.tenant_id),
+            "scope": admin_key.scope,
+            "created_at": admin_key.created_at,
+            "note": admin_key.note,
+        },
     )

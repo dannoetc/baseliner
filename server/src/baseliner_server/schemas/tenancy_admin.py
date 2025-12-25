@@ -63,14 +63,15 @@ class IssueAdminKeyResponse(BaseModel):
 class AdminKeysListResponse(BaseModel):
     items: list[AdminKeySummary]
 
-class WhoAmIKey(BaseModel):
-    id: str
-    tenant_id: str
-    scope: str
-    created_at: datetime
-    note: str | None = None
-
-
 class WhoAmIResponse(BaseModel):
+    """Identity/tenancy debugging endpoint.
+
+    `tenant_id` is kept for backward compatibility and matches `effective_tenant_id`.
+    """
+
     tenant_id: str
-    admin_key: WhoAmIKey
+    effective_tenant_id: str
+    requested_tenant_id: str | None = None
+    tenant_mismatch: bool = False
+    admin_key: AdminKeySummary
+
