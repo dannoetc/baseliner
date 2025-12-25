@@ -26,15 +26,34 @@ def _swap_unique_constraint(table_name: str, old_name: str, new_name: str, colum
     so we only use batch_alter_table when the SQLite dialect requires it.
     """
 
-    dialect_name = op.get_bind().dialect.name
+    bind = op.get_bind()
+    dialect_name = bind.dialect.name
+
+    inspector = sa.inspect(bind)
+
+    # Skip if the table doesn't exist (deployment environments may be mid-bootstrap).
+    if not inspector.has_table(table_name):
+        return
+
+    # Skip if the old constraint isn't present (already migrated or schema drift).
+    existing_uniques = {uc["name"] for uc in inspector.get_unique_constraints(table_name)}
+    if old_name not in existing_uniques:
+        # If the new one already exists, avoid re-adding it and return early.
+        if new_name in existing_uniques:
+            return
+        drop_first = False
+    else:
+        drop_first = True
 
     if dialect_name == "sqlite":
         # SQLite needs table recreation to add/drop constraints
         with op.batch_alter_table(table_name, recreate="always") as batch_op:
-            batch_op.drop_constraint(old_name, type_="unique")
+            if drop_first:
+                batch_op.drop_constraint(old_name, type_="unique")
             batch_op.create_unique_constraint(new_name, columns)
     else:
-        op.drop_constraint(old_name, table_name=table_name, type_="unique")
+        if drop_first:
+            op.drop_constraint(old_name, table_name=table_name, type_="unique")
         op.create_unique_constraint(new_name, table_name=table_name, columns=columns)
 
 
