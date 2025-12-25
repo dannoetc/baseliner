@@ -2,8 +2,11 @@
 
 Revision ID: 8d3b1c2a7f4e
 Revises: 51a4f5ea4b18
-Create Date: 2025-12-13
+Create Date: 2025-12-18
+
 """
+
+from __future__ import annotations
 
 from alembic import op
 
@@ -15,8 +18,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Postgres enums are global types; add the new label if it doesn't already exist.
-    # We avoid ALTER TYPE ... IF NOT EXISTS for compatibility across PG versions.
+    # PostgreSQL uses a real ENUM type; SQLite uses a CHECK constraint for SQLAlchemy Enum
+    # and does not require (or support) altering a type. So this migration is a no-op on SQLite.
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+
     op.execute(
         """
         DO $$
@@ -36,6 +43,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Postgres does not support dropping enum values directly.
-    # If you ever need to remove 'failed', you'd have to do a type-swap migration.
-    pass
+    # PostgreSQL cannot easily remove an enum value without a type rebuild; keep as no-op.
+    return
