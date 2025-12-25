@@ -17,9 +17,11 @@ def _trunc(s: str, n: int = 60) -> str:
     return s[: max(0, n - 1)] + "…"
 
 
-def render_policies_list(console: Console, payload: dict[str, Any]) -> None:
+def render_policies_list(
+    console: Console, payload: dict[str, Any], *, title: str = "Policies"
+) -> None:
     items = payload.get("items") or []
-    t = Table(title="Policies")
+    t = Table(title=title)
     t.add_column("id", overflow="fold")
     t.add_column("name")
     t.add_column("active")
@@ -49,12 +51,13 @@ def render_policy_detail(
     *,
     raw: bool = False,
     show_scripts: bool = False,
+    title: str = "Policy",
 ) -> None:
     if raw:
         console.print_json(data=policy.get("document") or {})
         return
 
-    meta = Table(title="Policy")
+    meta = Table(title=title)
     meta.add_column("field")
     meta.add_column("value", overflow="fold")
     for k in (
@@ -272,9 +275,11 @@ def render_assignments_plan(
         console.print("(no changes)")
 
 
-def render_runs_list(console: Console, payload: dict[str, Any]) -> None:
+def render_runs_list(
+    console: Console, payload: dict[str, Any], *, title: str = "Runs"
+) -> None:
     items = payload.get("items") or []
-    t = Table(title="Runs")
+    t = Table(title=title)
     t.add_column("id", overflow="fold")
     t.add_column("device_id", overflow="fold")
     t.add_column("status")
@@ -301,11 +306,12 @@ def render_run_detail(
     console: Console,
     payload: dict[str, Any],
     *,
-    full: bool,
+    full: bool = True,
     items_limit: int = 200,
     logs_limit: int = 50,
+    title: str = "Run",
 ) -> None:
-    meta = Table(title="Run")
+    meta = Table(title=title)
     meta.add_column("field")
     meta.add_column("value", overflow="fold")
     for k in (
