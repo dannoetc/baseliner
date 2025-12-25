@@ -11,7 +11,6 @@ from rich.table import Table
 from baseliner_admin.client import BaselinerAdminClient
 from baseliner_admin.render import (
     render_assignments_list,
-    render_assignments_plan,
     render_devices_list,
     render_device_tokens_list,
     render_enroll_tokens_list,
@@ -36,7 +35,9 @@ def run_tui(
 ) -> None:
     while True:
         console.clear()
-        console.print("[bold]Baseliner Admin TUI[/bold]")
+        console.print(
+            f"[bold]Baseliner Admin TUI[/bold] (tenant={client.cfg.tenant_id})"
+        )
         choice = Prompt.ask(
             "Menu",
             choices=["devices", "policies", "runs", "enroll", "audit", "exit"],
@@ -105,6 +106,50 @@ def _pick_from_table(
     return items[int(pick) - 1]
 
 
+def _resolve_device(
+    *,
+    client: BaselinerAdminClient,
+    console: Console,
+    device_ref: str,
+    include_deleted: bool = True,
+) -> dict[str, Any] | None:
+    device_ref = device_ref.strip()
+    payload = client.devices_list(limit=500, offset=0, include_deleted=include_deleted)
+    items = list(payload.get("items") or [])
+
+    parsed = try_parse_uuid(device_ref)
+    if parsed:
+        matches = [d for d in items if str(d.get("id")) == str(parsed)]
+    else:
+        q = device_ref.lower()
+        matches = [
+            d
+            for d in items
+            if q in str(d.get("device_key") or "").lower()
+            or q in str(d.get("hostname") or "").lower()
+        ]
+
+    if not matches:
+        console.print(f"No devices matched '{device_ref}'.")
+        _pause(console)
+        return None
+
+    if len(matches) == 1:
+        return matches[0]
+
+    pick = _pick_from_table(
+        console=console,
+        title="Matching devices",
+        items=[_Pick(label=str(m.get("device_key")), value=m) for m in matches],
+        columns=[
+            ("device_key", lambda p: str(p.value.get("device_key") or "")),
+            ("hostname", lambda p: str(p.value.get("hostname") or "")),
+            ("status", lambda p: str(p.value.get("status") or "")),
+        ],
+    )
+    return pick.value if pick else None
+
+
 def _devices_menu(*, client: BaselinerAdminClient, console: Console) -> None:
     while True:
         console.clear()
@@ -128,12 +173,9 @@ def _devices_menu(*, client: BaselinerAdminClient, console: Console) -> None:
 
         if choice == "show":
             raw = Prompt.ask("Device ID or device_key")
-            dev = client.devices_get(raw)
-            if not dev:
-                console.print("Not found.")
-                _pause(console)
-                continue
-            _device_detail_menu(client=client, console=console, device=dev)
+            dev = _resolve_device(client=client, console=console, device_ref=raw)
+            if dev:
+                _device_detail_menu(client=client, console=console, device=dev)
             continue
 
 
@@ -234,7 +276,7 @@ def _device_assignments_menu(
 
         action = Prompt.ask(
             "Action",
-            choices=["list", "set", "clone", "merge", "remove", "back"],
+            choices=["list", "set", "remove", "clear", "back"],
             default="list",
         )
 
@@ -249,33 +291,32 @@ def _device_assignments_menu(
                 _pause(console)
 
             elif action == "set":
-                policy_id = Prompt.ask("Policy UUID")
+                policy_name = Prompt.ask("Policy name (or UUID)")
                 prio = IntPrompt.ask("Priority", default=100)
-                payload = client.assignments_set(
-                    device_id=device_id, policy_id=policy_id, priority=prio
-                )
-                console.print_json(data=payload)
-                _pause(console)
-
-            elif action == "clone":
-                src_device = Prompt.ask("Source device UUID")
-                payload = client.assignments_clone(
-                    from_device_id=src_device, to_device_id=device_id
-                )
-                console.print_json(data=payload)
-                _pause(console)
-
-            elif action == "merge":
-                src_device = Prompt.ask("Source device UUID")
-                payload = client.assignments_merge(
-                    from_device_id=src_device, to_device_id=device_id
+                mode = Prompt.ask("Mode (enforce/audit)", default="enforce")
+                payload = client.assignment_set(
+                    device_id=device_id,
+                    policy_name=policy_name,
+                    priority=prio,
+                    mode=mode,
                 )
                 console.print_json(data=payload)
                 _pause(console)
 
             elif action == "remove":
                 policy_id = Prompt.ask("Policy UUID")
-                payload = client.assignments_remove(device_id=device_id, policy_id=policy_id)
+                payload = client.device_assignment_remove(
+                    device_id=device_id, policy_id=policy_id
+                )
+                console.print_json(data=payload)
+                _pause(console)
+
+            elif action == "clear":
+                if not Confirm.ask(
+                    f"Clear all assignments for {device_key}?", default=False
+                ):
+                    continue
+                payload = client.device_assignments_clear(device_id)
                 console.print_json(data=payload)
                 _pause(console)
 
@@ -309,7 +350,7 @@ def _policies_menu(*, client: BaselinerAdminClient, console: Console) -> None:
 
             elif choice == "show":
                 raw = Prompt.ask("Policy UUID")
-                payload = client.policies_get(raw)
+                payload = client.policies_show(raw)
                 console.clear()
                 render_policy_detail(console, payload, title=f"Policy {raw}")
                 _pause(console)
@@ -317,7 +358,7 @@ def _policies_menu(*, client: BaselinerAdminClient, console: Console) -> None:
             elif choice == "create":
                 path = Prompt.ask("Path to policy JSON")
                 data = read_json_file(Path(path))
-                payload = client.policies_create(data)
+                payload = client.policies_upsert(data)
                 console.print_json(data=payload)
                 _pause(console)
 
@@ -349,7 +390,7 @@ def _runs_menu(*, client: BaselinerAdminClient, console: Console) -> None:
 
             elif choice == "show":
                 raw = Prompt.ask("Run UUID")
-                payload = client.runs_get(raw)
+                payload = client.runs_show(raw)
                 console.clear()
                 render_run_detail(console, payload, title=f"Run {raw}")
                 _pause(console)
@@ -390,7 +431,7 @@ def _enroll_tokens_menu(*, client: BaselinerAdminClient, console: Console) -> No
             elif choice == "create":
                 ttl = IntPrompt.ask("TTL seconds (0 = none)", default=3600)
                 note = Prompt.ask("Note (optional)", default="")
-                payload = client.enroll_tokens_create(
+                payload = client.enroll_token_create(
                     ttl_seconds=ttl if ttl > 0 else None, note=note or None
                 )
                 console.print_json(data=payload)
@@ -399,7 +440,7 @@ def _enroll_tokens_menu(*, client: BaselinerAdminClient, console: Console) -> No
             elif choice == "revoke":
                 raw = Prompt.ask("Token UUID")
                 reason = Prompt.ask("Reason (optional)", default="")
-                payload = client.enroll_tokens_revoke(raw, reason=reason or None)
+                payload = client.enroll_token_revoke(raw, reason=reason or None)
                 console.print_json(data=payload)
                 _pause(console)
 
