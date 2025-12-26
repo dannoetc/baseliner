@@ -1,9 +1,15 @@
 # Baseliner TLS reverse proxy (rendered from template)
-# Domain: ${BASELINER_DOMAIN}
+# Domain (API): ${BASELINER_DOMAIN}
+# Domain (UI):  ${BASELINER_UI_DOMAIN}
 # SSL cert: ${SSL_CERT}
 
 upstream baseliner_api {
   server api:8000;
+  keepalive 16;
+}
+
+upstream baseliner_ui {
+  server ui:8080;
   keepalive 16;
 }
 
@@ -14,7 +20,7 @@ include /etc/nginx/includes/baseliner-http-*.inc;
 
 server {
   listen 80;
-  server_name ${BASELINER_DOMAIN};
+  server_name ${BASELINER_DOMAIN} ${BASELINER_UI_DOMAIN};
 
   location ^~ /.well-known/acme-challenge/ {
     root /var/www/certbot;
@@ -29,7 +35,7 @@ server {
 server {
   listen 443 ssl;
   http2 on;
-  server_name ${BASELINER_DOMAIN};
+  server_name ${BASELINER_UI_DOMAIN};
 
   ssl_certificate     ${SSL_CERT};
   ssl_certificate_key ${SSL_KEY};
@@ -41,7 +47,7 @@ server {
 
   # Device report ingestion (largest payloads). Keep this as a separate location so we can
   # apply stricter edge limits without affecting other endpoints.
-  location ~ ^/api/v1/device/reports/?$ {
+  location ^~ /api/v1/device/reports {
     proxy_http_version 1.1;
     proxy_set_header Connection "";
 
@@ -58,6 +64,110 @@ server {
     proxy_pass http://baseliner_api;
   }
 
+  # Keep API docs reachable even when / is the UI
+  location ^~ /docs {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+
+    include /etc/nginx/includes/baseliner-general-*.inc;
+
+    proxy_pass http://baseliner_api;
+  }
+
+  location = /openapi.json {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+
+    include /etc/nginx/includes/baseliner-general-*.inc;
+
+    proxy_pass http://baseliner_api;
+  }
+
+  # API routes
+  location ^~ /api/ {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+
+    include /etc/nginx/includes/baseliner-general-*.inc;
+
+    proxy_pass http://baseliner_api;
+  }
+
+  # UI (SPA)
+  location / {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+
+    proxy_pass http://baseliner_ui;
+  }
+}
+
+# Dedicated API host (optional but recommended): serve API directly on ${BASELINER_DOMAIN}
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name ${BASELINER_DOMAIN};
+
+  ssl_certificate     ${SSL_CERT};
+  ssl_certificate_key ${SSL_KEY};
+
+  ssl_protocols       TLSv1.2 TLSv1.3;
+  ssl_session_cache   shared:SSL:10m;
+  ssl_session_timeout 10m;
+  ssl_prefer_server_ciphers off;
+
+  # Device report ingestion (largest payloads). Keep this as a separate location so we can
+  # apply stricter edge limits without affecting other endpoints.
+  location ^~ /api/v1/device/reports {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+
+    include /etc/nginx/includes/baseliner-reports-*.inc;
+
+    proxy_pass http://baseliner_api;
+  }
+
+  # Everything else -> API
   location / {
     proxy_http_version 1.1;
     proxy_set_header Connection "";

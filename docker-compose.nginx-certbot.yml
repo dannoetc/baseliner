@@ -10,16 +10,23 @@
 #
 # Required env vars:
 #   BASELINER_DOMAIN=api.example.com
+#   BASELINER_UI_DOMAIN=ui.example.com   (or example.com)
 #   CERTBOT_EMAIL=you@example.com
 #
 # Bring up:
-#   BASELINER_DOMAIN=api.example.com CERTBOT_EMAIL=you@example.com \
+#   BASELINER_DOMAIN=api.example.com BASELINER_UI_DOMAIN=ui.example.com CERTBOT_EMAIL=you@example.com \
 #     docker compose -f docker-compose.yml -f docker-compose.nginx-certbot.yml up -d --build
 #
 services:
   api:
     ports: []
     command: ["bash", "-lc", "alembic upgrade head && uvicorn baseliner_server.main:app --reload --proxy-headers --forwarded-allow-ips='*' --host 0.0.0.0 --port 8000"]
+
+  ui:
+    ports: []
+    environment:
+      # When UI is served behind the edge nginx on the same origin, use a relative base URL.
+      UI_API_BASE_URL: ${UI_API_BASE_URL:-/api}
 
   nginx:
     build:
@@ -28,8 +35,10 @@ services:
     container_name: baseliner-nginx
     depends_on:
       - api
+      - ui
     environment:
       BASELINER_DOMAIN: ${BASELINER_DOMAIN}
+      BASELINER_UI_DOMAIN: ${BASELINER_UI_DOMAIN}
       # Optional: nginx edge limiting (Issue #23). Defaults to disabled.
       NGINX_LIMITS_ENABLED: ${NGINX_LIMITS_ENABLED:-false}
       # Per-IP request rate limiting (nginx `rate=` syntax, e.g. "5r/s" or "60r/m")
@@ -70,6 +79,7 @@ services:
       - nginx
     environment:
       BASELINER_DOMAIN: ${BASELINER_DOMAIN}
+      BASELINER_UI_DOMAIN: ${BASELINER_UI_DOMAIN}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL}
     volumes:
       - certbot_webroot:/var/www/certbot
@@ -78,9 +88,11 @@ services:
     command: >
       set -euo pipefail;
       : "${BASELINER_DOMAIN:?BASELINER_DOMAIN is required}";
+      : "${BASELINER_UI_DOMAIN:?BASELINER_UI_DOMAIN is required}";
       : "${CERTBOT_EMAIL:?CERTBOT_EMAIL is required}";
-      echo "[INFO] Ensuring initial cert exists for ${BASELINER_DOMAIN}";
+      echo "[INFO] Ensuring initial cert exists for ${BASELINER_UI_DOMAIN} (+ SAN ${BASELINER_DOMAIN})";
       certbot certonly --webroot -w /var/www/certbot
+        -d "${BASELINER_UI_DOMAIN}"
         -d "${BASELINER_DOMAIN}"
         --email "${CERTBOT_EMAIL}"
         --agree-tos

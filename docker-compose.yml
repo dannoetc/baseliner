@@ -40,5 +40,17 @@ services:
       - ./server:/app/server
     command: ["bash", "-lc", "alembic upgrade head && uvicorn baseliner_server.main:app --reload --host 0.0.0.0 --port 8000"]
 
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    container_name: baseliner-ui
+    environment:
+      # When running behind the optional nginx edge, this stays /api (same origin).
+      UI_API_BASE_URL: ${UI_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "8080:8080"
+
+
 volumes:
   baseliner_pg:

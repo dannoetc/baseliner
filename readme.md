@@ -22,6 +22,7 @@ This repo currently contains a working **server MVP** (FastAPI + Postgres) and a
 - `agent/` — Windows-focused Baseliner agent scaffold
   - `agent/src/baseliner_agent/` — Agent package + CLI
   - `agent/scripts/` — Helper scripts for local testing
+- `ui/` — Web admin UI (React SPA)
 - `policies/` — example policy documents (JSON)
 
 ---
@@ -35,12 +36,37 @@ docker compose up --build
 
 This starts **db** (Postgres) + **api** (FastAPI), runs Alembic migrations on startup, and exposes:
 - API: `http://localhost:8000`
+- UI: `http://localhost:8080`
 - DB: `localhost:5432`
+
+
+The UI uses the same admin auth header as the CLI: `X-Admin-Key`.
+In dev, log in with the `BASELINER_ADMIN_KEY` value from `docker-compose.yml` (default `change-me-too`).
 
 Windows convenience wrapper:
 ```powershell
 .\tools\dev-scripts\Dev-Up.ps1
 ```
+
+---
+
+## TLS / production-ish setup (edge nginx + Let's Encrypt)
+
+If you want the **UI** and **API** on different hostnames (recommended), set:
+
+- `BASELINER_UI_DOMAIN` — where the web UI is served (e.g. `baselinerops.com` or `ui.baselinerops.com`)
+- `BASELINER_DOMAIN` — where the API is served (e.g. `api.baselinerops.com`)
+
+Then run:
+
+```bash
+BASELINER_UI_DOMAIN=ui.example.com BASELINER_DOMAIN=api.example.com CERTBOT_EMAIL=you@example.com \
+  docker compose -f docker-compose.yml -f docker-compose.nginx-certbot.yml up -d --build
+```
+
+Notes:
+- The cert is requested with `BASELINER_UI_DOMAIN` as the **primary** name and `BASELINER_DOMAIN` as a **SAN**.
+- The UI can still reach the API via the UI hostname at `/api` (same-origin) unless you override `UI_API_BASE_URL`.
 
 
 ---
