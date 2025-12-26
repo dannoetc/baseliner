@@ -1,110 +1,57 @@
-# Optional: Nginx + Let's Encrypt (certbot) for TLS (FIXED bootstrap)
+# docker-compose.nginx-certbot.yml
 #
-# Problem this solves:
-# - nginx cannot start if it references LE cert paths that don't exist yet
-# - certbot cannot obtain a cert if nginx isn't serving the HTTP-01 challenge on port 80
+# Edge nginx + Let's Encrypt (HTTP-01 via webroot).
+# Uses two separate domains:
+#   BASELINER_UI_DOMAIN (UI host / cert primary)
+#   BASELINER_DOMAIN    (API host / SAN)
 #
-# Fix:
-# - nginx always starts using an internal *bootstrap* self-signed cert stored in /etc/nginx/certs
-# - once certbot obtains a real LE cert at /etc/letsencrypt/live/$BASELINER_DOMAIN/..., nginx re-renders config and reloads
-#
-# Required env vars:
-#   BASELINER_DOMAIN=api.example.com
-#   BASELINER_UI_DOMAIN=ui.example.com   (or example.com)
-#   CERTBOT_EMAIL=you@example.com
-#
-# Bring up:
-#   BASELINER_DOMAIN=api.example.com BASELINER_UI_DOMAIN=ui.example.com CERTBOT_EMAIL=you@example.com \
-#     docker compose -f docker-compose.yml -f docker-compose.nginx-certbot.yml up -d --build
-#
+# Requires ports 80 and 443 reachable from the internet.
+
 services:
-  api:
-    ports: []
-    command: ["bash", "-lc", "alembic upgrade head && uvicorn baseliner_server.main:app --reload --proxy-headers --forwarded-allow-ips='*' --host 0.0.0.0 --port 8000"]
-
-  ui:
-    ports: []
-    environment:
-      # When UI is served behind the edge nginx on the same origin, use a relative base URL.
-      UI_API_BASE_URL: ${UI_API_BASE_URL:-/api}
-
   nginx:
-    build:
-      context: .
-      dockerfile: deploy/nginx/Dockerfile
-    container_name: baseliner-nginx
-    depends_on:
-      - api
-      - ui
-    environment:
-      BASELINER_DOMAIN: ${BASELINER_DOMAIN}
-      BASELINER_UI_DOMAIN: ${BASELINER_UI_DOMAIN}
-      # Optional: nginx edge limiting (Issue #23). Defaults to disabled.
-      NGINX_LIMITS_ENABLED: ${NGINX_LIMITS_ENABLED:-false}
-      # Per-IP request rate limiting (nginx `rate=` syntax, e.g. "5r/s" or "60r/m")
-      NGINX_LIMIT_REQ_REPORTS_RATE: ${NGINX_LIMIT_REQ_REPORTS_RATE:-"5r/s"}
-      NGINX_LIMIT_REQ_REPORTS_BURST: ${NGINX_LIMIT_REQ_REPORTS_BURST:-20}
-      NGINX_LIMIT_REQ_GENERAL_RATE: ${NGINX_LIMIT_REQ_GENERAL_RATE:-"10r/s"}
-      NGINX_LIMIT_REQ_GENERAL_BURST: ${NGINX_LIMIT_REQ_GENERAL_BURST:-40}
-      # Per-IP concurrent connection limiting
-      NGINX_LIMIT_CONN_REPORTS_PER_IP: ${NGINX_LIMIT_CONN_REPORTS_PER_IP:-20}
-      NGINX_LIMIT_CONN_GENERAL_PER_IP: ${NGINX_LIMIT_CONN_GENERAL_PER_IP:-50}
-      # Zone sizes (shared memory) for nginx limiters
-      NGINX_LIMIT_REQ_ZONE_SIZE: ${NGINX_LIMIT_REQ_ZONE_SIZE:-"10m"}
-      NGINX_LIMIT_CONN_ZONE_SIZE: ${NGINX_LIMIT_CONN_ZONE_SIZE:-"10m"}
-
-      # Optional: real client IP extraction (recommended when nginx sits behind another proxy/LB)
-      # Defaults to disabled.
-      NGINX_REALIP_ENABLED: ${NGINX_REALIP_ENABLED:-false}
-      NGINX_REALIP_HEADER: ${NGINX_REALIP_HEADER:-"X-Forwarded-For"}
-      NGINX_REALIP_RECURSIVE: ${NGINX_REALIP_RECURSIVE:-"on"}
-      # Comma- or space-separated CIDRs for trusted proxies/LBs.
-      # If empty and NGINX_REALIP_ENABLED=true, nginx defaults to common private ranges.
-      NGINX_REALIP_TRUSTED_CIDRS: ${NGINX_REALIP_TRUSTED_CIDRS:-""}
-    ports:
-      - "80:80"
-      - "443:443"
+    # Keep your existing nginx build/image from docker-compose.yml; this file only augments it.
     volumes:
-      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./deploy/nginx/templates:/etc/nginx/templates:ro
-      - ./deploy/nginx/docker-entrypoint.d:/docker-entrypoint.d:ro
-      - certbot_webroot:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
-    restart: unless-stopped
+      # ACME webroot used for HTTP-01 challenges
+      - certbot-www:/var/www/certbot
+      # Let's Encrypt cert storage
+      - certbot-etc:/etc/letsencrypt
 
   certbot:
     image: certbot/certbot:latest
-    container_name: baseliner-certbot
-    depends_on:
-      - nginx
+    restart: unless-stopped
     environment:
       BASELINER_DOMAIN: ${BASELINER_DOMAIN}
       BASELINER_UI_DOMAIN: ${BASELINER_UI_DOMAIN}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL}
     volumes:
-      - certbot_webroot:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
-    entrypoint: ["/bin/sh", "-lc"]
-    command: >
-      set -euo pipefail;
-      : "${BASELINER_DOMAIN:?BASELINER_DOMAIN is required}";
-      : "${BASELINER_UI_DOMAIN:?BASELINER_UI_DOMAIN is required}";
-      : "${CERTBOT_EMAIL:?CERTBOT_EMAIL is required}";
-      echo "[INFO] Ensuring initial cert exists for ${BASELINER_UI_DOMAIN} (+ SAN ${BASELINER_DOMAIN})";
-      certbot certonly --webroot -w /var/www/certbot
-        -d "${BASELINER_UI_DOMAIN}"
-        -d "${BASELINER_DOMAIN}"
-        --email "${CERTBOT_EMAIL}"
-        --agree-tos
-        --no-eff-email
-        --non-interactive
-        || true;
-      echo "[INFO] Starting renewal loop";
+      - certbot-www:/var/www/certbot
+      - certbot-etc:/etc/letsencrypt
+      - certbot-var:/var/lib/letsencrypt
+    # Issue an initial cert if missing, then renew periodically.
+    entrypoint: /bin/sh
+    command: -lc '
+      set -eu;
+
+      : "${BASELINER_UI_DOMAIN:?Missing BASELINER_UI_DOMAIN}";
+      : "${BASELINER_DOMAIN:?Missing BASELINER_DOMAIN}";
+      : "${CERTBOT_EMAIL:?Missing CERTBOT_EMAIL}";
+
+      if [ ! -f "/etc/letsencrypt/live/${BASELINER_UI_DOMAIN}/fullchain.pem" ]; then
+        echo "[INFO] Requesting initial Let\x27s Encrypt cert for ${BASELINER_UI_DOMAIN} (SAN: ${BASELINER_DOMAIN})";
+        certbot certonly --webroot -w /var/www/certbot           -d "${BASELINER_UI_DOMAIN}" -d "${BASELINER_DOMAIN}"           --email "${CERTBOT_EMAIL}" --agree-tos --non-interactive --no-eff-email;
+        echo "[INFO] Initial certificate obtained.";
+      else
+        echo "[INFO] Existing certificate found for ${BASELINER_UI_DOMAIN}; skipping initial issuance.";
+      fi
+
+      echo "[INFO] Entering renewal loop (every 12h).";
       while :; do
         certbot renew --webroot -w /var/www/certbot --quiet || true;
         sleep 12h;
       done
+    '
 
 volumes:
-  letsencrypt:
-  certbot_webroot:
+  certbot-www:
+  certbot-etc:
+  certbot-var:
