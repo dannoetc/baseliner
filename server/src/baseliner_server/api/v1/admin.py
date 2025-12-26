@@ -39,13 +39,14 @@ from baseliner_server.db.models import (
     RunItem,
     Tenant,
 )
-from baseliner_server.services.device_tokens import rotate_device_token
+from baseliner_server.services.device_tokens import rotate_device_token, revoke_device_tokens
 from baseliner_server.schemas.admin import (
     AssignPolicyRequest,
     AssignPolicyResponse,
     ClearAssignmentsResponse,
     CreateEnrollTokenRequest,
     CreateEnrollTokenResponse,
+    DeleteDeviceRequest,
     RevokeEnrollTokenResponse,
     RevokeEnrollTokenRequest,
     EnrollTokensListResponse,
@@ -60,6 +61,10 @@ from baseliner_server.schemas.admin import (
     DeviceAuthTokenSummary,
     DeviceTokensListResponse,
     RevokeDeviceTokenResponse,
+    DeviceLifecycleRequest,
+    DeactivateDeviceResponse,
+    ReactivateDeviceResponse,
+    RotateDeviceTokenResponse,
     RunDebugSummary,
 )
 from baseliner_server.schemas.admin_list import (
@@ -755,6 +760,103 @@ def remove_device_assignment(
     )
 
 
+@router.post(
+    "/admin/devices/{device_id}/deactivate",
+    response_model=DeactivateDeviceResponse,
+)
+def deactivate_device(
+    request: Request,
+    payload: DeviceLifecycleRequest | None = None,
+    tenant: TenantContext = Depends(get_tenant_context),
+    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db: TenantScopedSession = Depends(get_scoped_session),
+) -> DeactivateDeviceResponse:
+    """Deactivate a device and revoke its active auth token(s)."""
+
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if device.status == DeviceStatus.deleted:
+        raise HTTPException(status_code=409, detail="Device is deleted")
+
+    now = utcnow()
+    revoked_tokens = revoke_device_tokens(db=db, device=device, now=now)
+    device.status = DeviceStatus.deactivated
+
+    reason = getattr(payload, "reason", None)
+    metadata = getattr(payload, "metadata", None)
+
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant.id,
+        actor_id=admin_actor,
+        action="device.deactivate",
+        target_type="device",
+        target_id=str(device.id),
+        data={"reason": reason, "metadata": metadata, "revoked_tokens": bool(revoked_tokens)},
+    )
+
+    db.add(device)
+    db.commit()
+
+    return DeactivateDeviceResponse(
+        device_id=str(device.id),
+        tenant_id=str(device.tenant_id),
+        status=device.status.value if hasattr(device.status, "value") else str(device.status),
+        deactivated_at=now,
+        token_revoked_at=device.token_revoked_at,
+        revoked_tokens=bool(revoked_tokens),
+    )
+
+
+@router.post(
+    "/admin/devices/{device_id}/reactivate",
+    response_model=ReactivateDeviceResponse,
+)
+def reactivate_device(
+    request: Request,
+    tenant: TenantContext = Depends(get_tenant_context),
+    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db: TenantScopedSession = Depends(get_scoped_session),
+) -> ReactivateDeviceResponse:
+    """Reactivate a deactivated device without issuing a token."""
+
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if device.status == DeviceStatus.deleted:
+        raise HTTPException(status_code=409, detail="Device is deleted")
+
+    now = utcnow()
+    device.status = DeviceStatus.active
+
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant.id,
+        actor_id=admin_actor,
+        action="device.reactivate",
+        target_type="device",
+        target_id=str(device.id),
+        data={},
+    )
+
+    db.add(device)
+    db.commit()
+
+    return ReactivateDeviceResponse(
+        device_id=str(device.id),
+        tenant_id=str(device.tenant_id),
+        status=device.status.value if hasattr(device.status, "value") else str(device.status),
+        reactivated_at=now,
+    )
+
+
 @router.delete(
     "/admin/devices/{device_id}",
     response_model=DeleteDeviceResponse,
@@ -786,7 +888,7 @@ def delete_device(
         raise HTTPException(status_code=404, detail="Device not found")
 
     # Idempotent: deleting an already-deleted device is OK.
-    already_deleted = device.status != DeviceStatus.active
+    already_deleted = device.status == DeviceStatus.deleted
 
     removed = (
         db.query(PolicyAssignment)
@@ -883,6 +985,54 @@ def restore_device(
         status=device.status.value if hasattr(device.status, "value") else str(device.status),
         restored_at=now,
         device_token=new_token,
+    )
+
+
+@router.post(
+    "/admin/devices/{device_id}/rotate-token",
+    response_model=RotateDeviceTokenResponse,
+)
+def rotate_device_token_admin(
+    request: Request,
+    payload: DeviceLifecycleRequest | None = None,
+    tenant: TenantContext = Depends(get_tenant_context),
+    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    admin_actor: str = Depends(require_admin_actor),
+    db: TenantScopedSession = Depends(get_scoped_session),
+) -> RotateDeviceTokenResponse:
+    """Rotate a device auth token (revoke old, mint new)."""
+
+    device = db.scalar(select(Device).where(Device.id == device_id, Device.tenant_id == tenant.id))
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if device.status == DeviceStatus.deleted:
+        raise HTTPException(status_code=409, detail="Device is deleted")
+
+    now = utcnow()
+    device_token, tok_row = rotate_device_token(
+        db=db, device=device, now=now, reason=getattr(payload, "reason", None), actor=admin_actor
+    )
+
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant.id,
+        actor_id=admin_actor,
+        action="device.rotate_token",
+        target_type="device",
+        target_id=str(device.id),
+        data={"reason": getattr(payload, "reason", None), "metadata": getattr(payload, "metadata", None)},
+    )
+
+    db.add(device)
+    db.commit()
+
+    return RotateDeviceTokenResponse(
+        device_id=str(device.id),
+        tenant_id=str(device.tenant_id),
+        token=device_token,
+        created_at=tok_row.created_at,
     )
 
 
@@ -1545,7 +1695,7 @@ def list_devices(
 
     stmt = select(Device, runs_any_ranked, runs_apply_ranked).where(Device.tenant_id == tenant.id)
     if not include_deleted:
-        stmt = stmt.where(Device.status == DeviceStatus.active)
+        stmt = stmt.where(Device.status != DeviceStatus.deleted)
 
     stmt = (
         stmt.outerjoin(
