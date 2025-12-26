@@ -131,6 +131,10 @@ class DeviceLifecycleRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+# Backwards-compatible alias used by older admin endpoints.
+DeleteDeviceRequest = DeviceLifecycleRequest
+
+
 class DeactivateDeviceResponse(BaseModel):
     device_id: str
     tenant_id: str
@@ -256,6 +260,7 @@ __all__ = [
     "RunOutFull",
     # debug bundle
     "DeviceDebugResponse",
+    "DeleteDeviceRequest",
     "PolicyAssignmentDebugOut",
     "RunDebugSummary",
 ]
