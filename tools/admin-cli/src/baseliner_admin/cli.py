@@ -646,6 +646,24 @@ def devices_delete(
     _console().print_json(data=payload)
 
 
+@devices_app.command("deactivate")
+def devices_deactivate(
+    ctx: typer.Context,
+    device_id: str,
+    reason: str | None = typer.Option(None, "--reason"),
+) -> None:
+    """Alias for `devices delete`.
+
+    This matches the API alias /admin/devices/{id}/deactivate.
+    """
+    c = _client(ctx)
+    payload = c.devices_deactivate(device_id, reason=reason)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
 @devices_app.command("restore")
 def devices_restore(ctx: typer.Context, device_id: str) -> None:
     c = _client(ctx)
@@ -656,10 +674,38 @@ def devices_restore(ctx: typer.Context, device_id: str) -> None:
     _console().print_json(data=payload)
 
 
+@devices_app.command("reactivate")
+def devices_reactivate(ctx: typer.Context, device_id: str) -> None:
+    """Alias for `devices restore`.
+
+    This matches the API alias /admin/devices/{id}/reactivate.
+    """
+    c = _client(ctx)
+    payload = c.devices_reactivate(device_id)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
 @devices_app.command("revoke-token")
 def devices_revoke_token(ctx: typer.Context, device_id: str) -> None:
     c = _client(ctx)
     payload = c.devices_revoke_token(device_id)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
+@devices_app.command("rotate-token")
+def devices_rotate_token(ctx: typer.Context, device_id: str) -> None:
+    """Alias for `devices revoke-token`.
+
+    This matches the API alias /admin/devices/{id}/rotate-token.
+    """
+    c = _client(ctx)
+    payload = c.devices_rotate_token(device_id)
     if ctx.obj.get("json"):
         print(c.pretty_json(payload))
         return

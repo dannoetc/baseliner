@@ -127,11 +127,32 @@ class BaselinerAdminClient:
             params["reason"] = reason
         return self.request("DELETE", f"/api/v1/admin/devices/{device_id}", params=params)
 
+    def devices_deactivate(self, device_id: str, *, reason: str | None = None) -> Any:
+        """Alias for soft-deleting a device.
+
+        This exists for ergonomics; it calls the server's /deactivate endpoint.
+        """
+
+        params: dict[str, Any] = {}
+        if reason:
+            params["reason"] = reason
+        return self.request("POST", f"/api/v1/admin/devices/{device_id}/deactivate", params=params)
+
     def devices_restore(self, device_id: str) -> Any:
         return self.request("POST", f"/api/v1/admin/devices/{device_id}/restore")
 
+    def devices_reactivate(self, device_id: str) -> Any:
+        """Alias for restoring a soft-deleted device."""
+
+        return self.request("POST", f"/api/v1/admin/devices/{device_id}/reactivate")
+
     def devices_revoke_token(self, device_id: str) -> Any:
         return self.request("POST", f"/api/v1/admin/devices/{device_id}/revoke-token")
+
+    def devices_rotate_token(self, device_id: str) -> Any:
+        """Alias for revoking the active token and minting a new one."""
+
+        return self.request("POST", f"/api/v1/admin/devices/{device_id}/rotate-token")
 
     def device_assignments_list(self, device_id: str) -> Any:
         return self.request("GET", f"/api/v1/admin/devices/{device_id}/assignments")
