@@ -2,6 +2,7 @@
 - Added admin device lifecycle endpoints for deactivate, reactivate, and token rotation with audit logging and tenant scoping.
 - Updated device token handling to support revocation without rotation and added CLI commands for lifecycle operations.
 - Expanded tests to cover tenant isolation, token rotation, and audit logging for new device lifecycle flows.
+- Added a backwards-compatible DeleteDeviceRequest alias to avoid missing type errors in admin routes.
 
 ## Files Modified
 - server/src/baseliner_server/db/models.py
