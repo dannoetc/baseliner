@@ -1,8 +1,27 @@
 services:
   nginx:
-    # This file augments the base stack to add TLS volumes.
+    # Edge reverse proxy (TLS termination + routing UI/API)
+    # NOTE: This service is defined here (not in docker-compose.yml) in many Baseliner setups.
+    build:
+      context: ./deploy/nginx
+    image: baseliner-nginx:latest
+    restart: unless-stopped
+    environment:
+      BASELINER_DOMAIN: ${BASELINER_DOMAIN}
+      BASELINER_UI_DOMAIN: ${BASELINER_UI_DOMAIN}
+      # Optional knobs (match your existing behavior)
+      NGINX_LIMITS_ENABLED: ${NGINX_LIMITS_ENABLED:-false}
+      NGINX_REALIP_ENABLED: ${NGINX_REALIP_ENABLED:-false}
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+      - ui
     volumes:
+      # ACME webroot (HTTP-01)
       - certbot-www:/var/www/certbot
+      # Let's Encrypt cert storage
       - certbot-etc:/etc/letsencrypt
 
   certbot:
