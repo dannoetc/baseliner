@@ -120,6 +120,7 @@ def get_admin_key_optional(
 
 def get_scoped_session(
     request: Request,
+    tenant_ctx: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),

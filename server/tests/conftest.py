@@ -107,7 +107,6 @@ def client(db_engine) -> Generator[TestClient, None, None]:
     try:
         default_headers = {
             "X-Admin-Key": settings.baseliner_admin_key,
-            "X-Tenant-ID": str(DEFAULT_TENANT_ID),
         }
         yield TestClient(app, headers=default_headers)
     finally:

@@ -230,6 +230,52 @@ def list_tenants(
     )
 
 
+
+@router.patch(
+    "/admin/tenants/{tenant_id}",
+    response_model=UpdateTenantResponse,
+    dependencies=[Depends(require_admin_scope(AdminScope.superadmin))],
+)
+def update_tenant(
+    tenant_id: uuid.UUID,
+    payload: UpdateTenantRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin_actor: uuid.UUID = Depends(require_admin_actor),
+) -> UpdateTenantResponse:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    updates: dict[str, object] = {}
+    if payload.name is not None and payload.name != tenant.name:
+        updates["name"] = {"from": tenant.name, "to": payload.name}
+        tenant.name = payload.name
+    if payload.is_active is not None and payload.is_active != tenant.is_active:
+        updates["is_active"] = {"from": tenant.is_active, "to": payload.is_active}
+        tenant.is_active = payload.is_active
+
+    emit_admin_audit(
+        db,
+        request,
+        tenant_id=tenant.id,
+        actor_id=admin_actor,
+        action="tenant.update",
+        target_type="tenant",
+        target_id=str(tenant.id),
+        data={"updates": updates} if updates else {},
+    )
+
+    db.commit()
+
+    return UpdateTenantResponse(
+        tenant=TenantSummary(
+            id=str(tenant.id),
+            name=tenant.name,
+            created_at=tenant.created_at,
+            is_active=tenant.is_active,
+        )
+    )
 @router.post(
     "/admin/tenants/{tenant_id}/admin-keys",
     response_model=IssueAdminKeyResponse,
