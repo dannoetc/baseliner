@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+# Write runtime config the SPA can read.
+# The UI code should read window.__BASELINER_CONFIG__.API_BASE_URL
+API_BASE_URL="${UI_API_BASE_URL:-${API_BASE_URL:-}}"
+
+cat > /usr/share/nginx/html/config.js <<EOF
+// Generated at container start time.
+window.__BASELINER_CONFIG__ = {
+  API_BASE_URL: ${API_BASE_URL:+"$API_BASE_URL"}${API_BASE_URL:-null}
+};
+EOF
+
+exec "$@"

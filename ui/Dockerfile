@@ -9,11 +9,11 @@ RUN npm run build
 # Runtime stage
 FROM nginx:1.27-alpine
 
-# UI runtime config + SPA routing
+# SPA routing
 COPY ui/docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY ui/docker/baseliner-ui-entrypoint /usr/local/bin/baseliner-ui-entrypoint
 
-# Ensure entrypoint is executable (git on Windows can drop +x bit)
+# Entrypoint to inject runtime config (API base URL)
+COPY ui/docker/baseliner-ui-entrypoint /usr/local/bin/baseliner-ui-entrypoint
 RUN chmod +x /usr/local/bin/baseliner-ui-entrypoint
 
 COPY --from=build /app/dist /usr/share/nginx/html
