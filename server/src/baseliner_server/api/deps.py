@@ -137,11 +137,13 @@ def get_scoped_session(
     if isinstance(existing, TenantScopedSession):
         return existing
 
-    tenant_ctx = get_tenant_context(request) or getattr(
-        getattr(request, "state", None), "tenant_context", None
-    )
-    tenant_id: uuid.UUID | None = getattr(tenant_ctx, "id", None)
+    # IMPORTANT: use the dependency-injected tenant context so FastAPI dependency overrides
+    # (tests) work consistently. Avoid calling get_tenant_context() directly here, which
+    # would bypass overrides and lead to mismatched tenant ids between dependencies.
+    ctx = tenant_ctx or getattr(getattr(request, "state", None), "tenant_context", None)
+    tenant_id: uuid.UUID | None = getattr(ctx, "id", None)
 
+    # Device bearer tokens have the highest priority: they deterministically pick a tenant.
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
         token_h = hash_token(token)
@@ -160,13 +162,14 @@ def get_scoped_session(
             if dev is not None:
                 tenant_id = getattr(dev, "tenant_id", None) or DEFAULT_TENANT_ID
 
+    # Explicit tenant header next (superadmin use case).
     if tenant_id is None and x_tenant_id:
         tenant = _get_tenant(db, _parse_tenant_id(x_tenant_id))
         tenant_id = tenant.id
 
     tenant_id = tenant_id or DEFAULT_TENANT_ID
 
-    scope = getattr(tenant_ctx, "admin_scope", "superadmin")
+    scope = getattr(ctx, "admin_scope", "superadmin")
     if (
         authorization
         and authorization.lower().startswith("bearer ")
@@ -178,10 +181,10 @@ def get_scoped_session(
     tenant = _get_tenant(db, tenant_id)
     _enforce_tenant_active(tenant, admin_scope=scope)
 
-    tenant_ctx = TenantContext(id=tenant_id, admin_scope=scope)
-    request.state.tenant_context = tenant_ctx
+    resolved_ctx = TenantContext(id=tenant_id, admin_scope=scope)
+    request.state.tenant_context = resolved_ctx
 
-    scoped = TenantScopedSession(db=db, tenant=tenant_ctx)
+    scoped = TenantScopedSession(db=db, tenant=resolved_ctx)
     request.state.scoped_session = scoped
     return scoped
 
