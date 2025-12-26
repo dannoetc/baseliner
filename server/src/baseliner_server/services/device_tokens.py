@@ -16,21 +16,27 @@ def utcnow() -> datetime:
 
 
 def _revoke_active_device_tokens(
-    *, db: TenantScopedSession, device: Device, now: datetime, new_token_row: DeviceAuthToken
-) -> None:
+    *,
+    db: TenantScopedSession,
+    device: Device,
+    now: datetime,
+    new_token_row: DeviceAuthToken | None,
+) -> bool:
     """Revoke any active token-history rows for this device.
 
     Compatibility bridge: if there are no token rows yet (pre-migration / tests),
     capture + revoke the legacy device.auth_token_hash so future lookups are consistent.
+    Returns True if any tokens were revoked.
     """
 
+    revoked_any = False
     active: Iterable[DeviceAuthToken] = (
         db.query(DeviceAuthToken)
         .filter(
             DeviceAuthToken.device_id == device.id,
             DeviceAuthToken.tenant_id == device.tenant_id,
             DeviceAuthToken.revoked_at.is_(None),
-            DeviceAuthToken.id != new_token_row.id,
+            DeviceAuthToken.id != (new_token_row.id if new_token_row else None),
         )
         .all()
     )
@@ -38,15 +44,16 @@ def _revoke_active_device_tokens(
     if active:
         for t in active:
             t.revoked_at = now
-            t.replaced_by_id = new_token_row.id
+            t.replaced_by_id = new_token_row.id if new_token_row else None
             db.add(t)
+            revoked_any = True
         db.flush()
-        return
+        return revoked_any
 
     # If no token rows exist yet, fall back to legacy state.
     old_hash = getattr(device, "auth_token_hash", None)
     if not old_hash:
-        return
+        return revoked_any
 
     legacy = db.scalar(
         select(DeviceAuthToken).where(
@@ -64,10 +71,28 @@ def _revoke_active_device_tokens(
         db.add(legacy)
         db.flush()
 
-    legacy.revoked_at = now
-    legacy.replaced_by_id = new_token_row.id
-    db.add(legacy)
-    db.flush()
+    if legacy.revoked_at is None:
+        legacy.revoked_at = now
+        legacy.replaced_by_id = new_token_row.id if new_token_row else None
+        db.add(legacy)
+        db.flush()
+        revoked_any = True
+
+    return revoked_any
+
+
+def revoke_device_tokens(*, db: TenantScopedSession, device: Device, now: datetime | None = None) -> bool:
+    """Revoke any active tokens for a device without minting a replacement."""
+
+    now = now or utcnow()
+    revoked_any = _revoke_active_device_tokens(db=db, device=device, now=now, new_token_row=None)
+
+    if revoked_any:
+        device.token_revoked_at = now
+        device.revoked_auth_token_hash = getattr(device, "auth_token_hash", None)
+        db.add(device)
+
+    return revoked_any
 
 
 def rotate_device_token(

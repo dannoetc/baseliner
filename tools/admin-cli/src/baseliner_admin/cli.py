@@ -656,6 +656,44 @@ def devices_restore(ctx: typer.Context, device_id: str) -> None:
     _console().print_json(data=payload)
 
 
+@devices_app.command("deactivate")
+def devices_deactivate(
+    ctx: typer.Context,
+    device_id: str,
+    reason: str | None = typer.Option(None, "--reason", help="Optional reason"),
+) -> None:
+    c = _client(ctx)
+    payload = c.devices_deactivate(device_id, reason=reason)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
+@devices_app.command("reactivate")
+def devices_reactivate(ctx: typer.Context, device_id: str) -> None:
+    c = _client(ctx)
+    payload = c.devices_reactivate(device_id)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
+@devices_app.command("rotate-token")
+def devices_rotate_token(
+    ctx: typer.Context,
+    device_id: str,
+    reason: str | None = typer.Option(None, "--reason", help="Optional audit reason"),
+) -> None:
+    c = _client(ctx)
+    payload = c.devices_rotate_token(device_id, reason=reason)
+    if ctx.obj.get("json"):
+        print(c.pretty_json(payload))
+        return
+    _console().print_json(data=payload)
+
+
 @devices_app.command("revoke-token")
 def devices_revoke_token(ctx: typer.Context, device_id: str) -> None:
     c = _client(ctx)

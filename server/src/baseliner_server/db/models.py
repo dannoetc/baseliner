@@ -103,6 +103,7 @@ class LogLevel(str, enum.Enum):
 
 class DeviceStatus(str, enum.Enum):
     active = "active"
+    deactivated = "deactivated"
     deleted = "deleted"
 
 
