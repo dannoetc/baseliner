@@ -46,6 +46,7 @@ from baseliner_server.schemas.admin import (
     ClearAssignmentsResponse,
     CreateEnrollTokenRequest,
     CreateEnrollTokenResponse,
+    DeleteDeviceRequest,
     RevokeEnrollTokenResponse,
     RevokeEnrollTokenRequest,
     EnrollTokensListResponse,
