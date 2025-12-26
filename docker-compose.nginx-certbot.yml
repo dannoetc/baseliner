@@ -1,19 +1,8 @@
-# docker-compose.nginx-certbot.yml
-#
-# Edge nginx + Let's Encrypt (HTTP-01 via webroot).
-# Uses two separate domains:
-#   BASELINER_UI_DOMAIN (UI host / cert primary)
-#   BASELINER_DOMAIN    (API host / SAN)
-#
-# Requires ports 80 and 443 reachable from the internet.
-
 services:
   nginx:
-    # Keep your existing nginx build/image from docker-compose.yml; this file only augments it.
+    # This file augments the base stack to add TLS volumes.
     volumes:
-      # ACME webroot used for HTTP-01 challenges
       - certbot-www:/var/www/certbot
-      # Let's Encrypt cert storage
       - certbot-etc:/etc/letsencrypt
 
   certbot:
@@ -27,29 +16,27 @@ services:
       - certbot-www:/var/www/certbot
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/lib/letsencrypt
-    # Issue an initial cert if missing, then renew periodically.
-    entrypoint: /bin/sh
-    command: -lc '
-      set -eu;
+    entrypoint: ["/bin/sh", "-lc"]
+    command: |
+      set -eu
 
-      : "${BASELINER_UI_DOMAIN:?Missing BASELINER_UI_DOMAIN}";
-      : "${BASELINER_DOMAIN:?Missing BASELINER_DOMAIN}";
-      : "${CERTBOT_EMAIL:?Missing CERTBOT_EMAIL}";
+      : "${BASELINER_UI_DOMAIN:?Missing BASELINER_UI_DOMAIN}"
+      : "${BASELINER_DOMAIN:?Missing BASELINER_DOMAIN}"
+      : "${CERTBOT_EMAIL:?Missing CERTBOT_EMAIL}"
 
       if [ ! -f "/etc/letsencrypt/live/${BASELINER_UI_DOMAIN}/fullchain.pem" ]; then
-        echo "[INFO] Requesting initial Let\x27s Encrypt cert for ${BASELINER_UI_DOMAIN} (SAN: ${BASELINER_DOMAIN})";
-        certbot certonly --webroot -w /var/www/certbot           -d "${BASELINER_UI_DOMAIN}" -d "${BASELINER_DOMAIN}"           --email "${CERTBOT_EMAIL}" --agree-tos --non-interactive --no-eff-email;
-        echo "[INFO] Initial certificate obtained.";
+        echo "[INFO] Requesting initial Let's Encrypt cert for ${BASELINER_UI_DOMAIN} (SAN: ${BASELINER_DOMAIN})"
+        certbot certonly --webroot -w /var/www/certbot           -d "${BASELINER_UI_DOMAIN}" -d "${BASELINER_DOMAIN}"           --email "${CERTBOT_EMAIL}"           --agree-tos --non-interactive --no-eff-email
+        echo "[INFO] Initial certificate obtained."
       else
-        echo "[INFO] Existing certificate found for ${BASELINER_UI_DOMAIN}; skipping initial issuance.";
+        echo "[INFO] Existing certificate found for ${BASELINER_UI_DOMAIN}; skipping initial issuance."
       fi
 
-      echo "[INFO] Entering renewal loop (every 12h).";
+      echo "[INFO] Entering renewal loop (every 12h)."
       while :; do
-        certbot renew --webroot -w /var/www/certbot --quiet || true;
-        sleep 12h;
+        certbot renew --webroot -w /var/www/certbot --quiet || true
+        sleep 12h
       done
-    '
 
 volumes:
   certbot-www:
