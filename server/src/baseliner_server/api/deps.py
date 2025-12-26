@@ -16,7 +16,14 @@ from baseliner_server.core.tenancy import (
     ensure_default_tenant,
     get_tenant_context,
 )
-from baseliner_server.db.models import AdminKey, AdminScope, Device, DeviceAuthToken, DeviceStatus, Tenant
+from baseliner_server.db.models import (
+    AdminKey,
+    AdminScope,
+    Device,
+    DeviceAuthToken,
+    DeviceStatus,
+    Tenant,
+)
 from baseliner_server.db.session import SessionLocal
 
 
@@ -61,7 +68,9 @@ def get_db() -> Generator[Session, None, None]:
 
 def _parse_tenant_id(raw: Optional[str]) -> uuid.UUID:
     if not raw:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-Tenant-ID header")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-Tenant-ID header"
+        )
     try:
         return uuid.UUID(str(raw))
     except ValueError:
@@ -76,7 +85,6 @@ def _try_parse_tenant_id(raw: Optional[str]) -> uuid.UUID | None:
         return uuid.UUID(raw)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid X-Tenant-ID: {e}") from e
-
 
 
 def _get_tenant(db: Session, tenant_id: uuid.UUID) -> Tenant:
@@ -100,9 +108,6 @@ def _enforce_tenant_active(tenant: Tenant, *, admin_scope: str) -> None:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant disabled")
 
 
-
-
-
 def get_admin_key_optional(
     request: Request,
     x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
@@ -118,6 +123,7 @@ def get_admin_key_optional(
         return None
     return get_admin_key(request=request, x_admin_key=x_admin_key, x_tenant_id=x_tenant_id, db=db)
 
+
 def get_scoped_session(
     request: Request,
     tenant_ctx: TenantContext = Depends(get_tenant_context),
@@ -131,7 +137,9 @@ def get_scoped_session(
     if isinstance(existing, TenantScopedSession):
         return existing
 
-    tenant_ctx = get_tenant_context(request) or getattr(getattr(request, "state", None), "tenant_context", None)
+    tenant_ctx = get_tenant_context(request) or getattr(
+        getattr(request, "state", None), "tenant_context", None
+    )
     tenant_id: uuid.UUID | None = getattr(tenant_ctx, "id", None)
 
     if authorization and authorization.lower().startswith("bearer "):
@@ -159,7 +167,11 @@ def get_scoped_session(
     tenant_id = tenant_id or DEFAULT_TENANT_ID
 
     scope = getattr(tenant_ctx, "admin_scope", "superadmin")
-    if authorization and authorization.lower().startswith("bearer ") and not (x_admin_key or "").strip():
+    if (
+        authorization
+        and authorization.lower().startswith("bearer ")
+        and not (x_admin_key or "").strip()
+    ):
         # Authenticated device request.
         scope = "device"
 
@@ -178,8 +190,6 @@ def get_bearer_token(authorization: Optional[str] = Header(default=None)) -> str
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     return authorization.split(" ", 1)[1].strip()
-
-
 
 
 def get_admin_key(
@@ -237,7 +247,6 @@ def get_admin_key(
     request.state.tenant_mismatch = tenant_mismatch
 
     return admin_key
-
 
 
 def require_admin(_: AdminKey = Depends(get_admin_key)) -> None:
@@ -306,11 +315,15 @@ def get_current_device(
             )
         )
         if not device:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device token"
+            )
 
         if device.revoked_auth_token_hash == token_h:
             # Revoked token presented (deny, but don't mutate device state).
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token revoked")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Device token revoked"
+            )
 
         # Active legacy token: create a history row so subsequent lookups are consistent.
         tok = DeviceAuthToken(
