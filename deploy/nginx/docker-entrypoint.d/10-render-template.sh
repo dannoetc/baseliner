@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 
-: "${BASELINER_DOMAIN:?BASELINER_DOMAIN is required}"
+: "${BASELINER_DOMAIN:?BASELINER_DOMAIN is required}"  # API domain
+
+# UI domain is optional for backward compatibility. If omitted, defaults to BASELINER_DOMAIN.
+: "${BASELINER_UI_DOMAIN:=${BASELINER_DOMAIN}}"
 
 TEMPLATE="/etc/nginx/templates/baseliner.conf.template"
 OUT="/etc/nginx/conf.d/baseliner.conf"
@@ -43,8 +46,10 @@ INCLUDES_DIR="/etc/nginx/includes"
 # If empty, defaults to common private ranges (good for a local/host reverse proxy).
 : "${NGINX_REALIP_TRUSTED_CIDRS:=}"
 
-LE_CERT="/etc/letsencrypt/live/${BASELINER_DOMAIN}/fullchain.pem"
-LE_KEY="/etc/letsencrypt/live/${BASELINER_DOMAIN}/privkey.pem"
+# Certs are stored under the "primary" domain used during initial issuance.
+# We request the UI domain as primary and add the API domain as a SAN.
+LE_CERT="/etc/letsencrypt/live/${BASELINER_UI_DOMAIN}/fullchain.pem"
+LE_KEY="/etc/letsencrypt/live/${BASELINER_UI_DOMAIN}/privkey.pem"
 
 BOOT_DIR="/etc/nginx/certs"
 BOOT_CERT="${BOOT_DIR}/bootstrap.crt"
@@ -148,22 +153,22 @@ write_limits
 write_realip
 
 if [ ! -f "${BOOT_CERT}" ] || [ ! -f "${BOOT_KEY}" ]; then
-  echo "[INFO] Generating bootstrap self-signed cert for ${BASELINER_DOMAIN}"
+  echo "[INFO] Generating bootstrap self-signed cert for ${BASELINER_UI_DOMAIN}"
   openssl req -x509 -nodes -newkey rsa:2048 \
     -keyout "${BOOT_KEY}" \
     -out "${BOOT_CERT}" \
     -days 7 \
-    -subj "/CN=${BASELINER_DOMAIN}" >/dev/null 2>&1
+    -subj "/CN=${BASELINER_UI_DOMAIN}" >/dev/null 2>&1
 fi
 
 if [ -f "${LE_CERT}" ] && [ -f "${LE_KEY}" ]; then
   export SSL_CERT="${LE_CERT}"
   export SSL_KEY="${LE_KEY}"
-  echo "[OK] Using Let's Encrypt certs for ${BASELINER_DOMAIN}"
+  echo "[OK] Using Let's Encrypt certs for ${BASELINER_UI_DOMAIN} (SAN may include ${BASELINER_DOMAIN})"
 else
   export SSL_CERT="${BOOT_CERT}"
   export SSL_KEY="${BOOT_KEY}"
-  echo "[WARN] Let's Encrypt cert not found yet; using bootstrap self-signed cert for ${BASELINER_DOMAIN}"
+  echo "[WARN] Let's Encrypt cert not found yet; using bootstrap self-signed cert for ${BASELINER_UI_DOMAIN}"
 fi
 
 if [ ! -f "$TEMPLATE" ]; then
@@ -171,5 +176,5 @@ if [ ! -f "$TEMPLATE" ]; then
   exit 1
 fi
 
-envsubst '${BASELINER_DOMAIN} ${SSL_CERT} ${SSL_KEY}' < "$TEMPLATE" > "$OUT"
-echo "[OK] Rendered nginx site config for BASELINER_DOMAIN=$BASELINER_DOMAIN"
+envsubst '${BASELINER_DOMAIN} ${BASELINER_UI_DOMAIN} ${SSL_CERT} ${SSL_KEY}' < "$TEMPLATE" > "$OUT"
+echo "[OK] Rendered nginx site config for BASELINER_DOMAIN=$BASELINER_DOMAIN BASELINER_UI_DOMAIN=$BASELINER_UI_DOMAIN"

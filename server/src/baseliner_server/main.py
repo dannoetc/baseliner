@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from baseliner_server import __version__
@@ -7,11 +9,9 @@ from baseliner_server.middleware.correlation import CorrelationIdMiddleware
 from baseliner_server.middleware.rate_limit import InMemoryRateLimiter, RateLimitConfig
 from baseliner_server.middleware.request_size import RequestSizeLimitMiddleware, RequestSizeLimits
 
-app = FastAPI(title="Baseliner API", version=__version__)
 
-
-@app.on_event("startup")
-def _bootstrap_db_state() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     """Best-effort bootstrapping for dev/prod.
 
     We keep these lightweight and idempotent so a fresh deployment behaves predictably:
@@ -32,6 +32,11 @@ def _bootstrap_db_state() -> None:
             db.close()
         except Exception:
             pass
+
+    yield
+
+
+app = FastAPI(title="Baseliner API", version=__version__, lifespan=lifespan)
 
 
 # --- Request hardening (Issue #23) ---

@@ -940,6 +940,34 @@ def delete_device(
 
 
 @router.post(
+    "/admin/devices/{device_id}/deactivate",
+    response_model=DeleteDeviceResponse,
+)
+def deactivate_device(
+    request: Request,
+    device_id: uuid.UUID,
+    payload: DeleteDeviceRequest,
+    db: TenantScopedSession = Depends(get_scoped_session),
+    _: AdminKey = Depends(require_admin),
+    admin_actor: str = Depends(require_admin_actor),
+) -> DeleteDeviceResponse:
+    """Alias for "delete" semantics.
+
+    Historically we used "delete" for device deactivation (soft-delete) in the MVP.
+    This endpoint exists for clearer operator intent / client ergonomics.
+    """
+
+    return delete_device(
+        request=request,
+        device_id=device_id,
+        payload=payload,
+        db=db,
+        _=_,
+        admin_actor=admin_actor,
+    )
+
+
+@router.post(
     "/admin/devices/{device_id}/restore",
     response_model=RestoreDeviceResponse,
 )
@@ -1077,6 +1105,33 @@ def revoke_device_token(
         status=device.status.value if hasattr(device.status, "value") else str(device.status),
         token_revoked_at=now,
         device_token=new_token,
+    )
+
+
+@router.post(
+    "/admin/devices/{device_id}/rotate-token",
+    response_model=RevokeDeviceTokenResponse,
+    dependencies=[Depends(require_admin)],
+)
+def rotate_device_token_endpoint(
+    request: Request,
+    tenant: TenantContext = Depends(get_tenant_context),
+    device_id: uuid.UUID = Path(..., description="Device UUID"),
+    db: TenantScopedSession = Depends(get_scoped_session),
+    admin_actor: str = Depends(require_admin_actor),
+) -> RevokeDeviceTokenResponse:
+    """Alias for /admin/devices/{id}/revoke-token.
+
+    The underlying behavior is a token **rotation**: revoke the current token(s) and
+    mint a new device token.
+    """
+
+    return revoke_device_token(
+        request=request,
+        tenant=tenant,
+        device_id=device_id,
+        db=db,
+        admin_actor=admin_actor,
     )
 
 
