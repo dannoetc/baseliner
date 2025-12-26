@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from baseliner_server.api.deps import (
