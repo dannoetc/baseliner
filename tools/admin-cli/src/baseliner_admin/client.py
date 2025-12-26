@@ -133,6 +133,29 @@ class BaselinerAdminClient:
     def devices_revoke_token(self, device_id: str) -> Any:
         return self.request("POST", f"/api/v1/admin/devices/{device_id}/revoke-token")
 
+    def devices_deactivate(self, device_id: str, *, reason: str | None = None) -> Any:
+        payload: dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        return self.request(
+            "POST",
+            f"/api/v1/admin/devices/{device_id}/deactivate",
+            json=payload or None,
+        )
+
+    def devices_reactivate(self, device_id: str) -> Any:
+        return self.request("POST", f"/api/v1/admin/devices/{device_id}/reactivate")
+
+    def devices_rotate_token(self, device_id: str, *, reason: str | None = None) -> Any:
+        payload: dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        return self.request(
+            "POST",
+            f"/api/v1/admin/devices/{device_id}/rotate-token",
+            json=payload or None,
+        )
+
     def device_assignments_list(self, device_id: str) -> Any:
         return self.request("GET", f"/api/v1/admin/devices/{device_id}/assignments")
 

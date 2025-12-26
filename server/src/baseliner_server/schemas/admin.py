@@ -19,6 +19,7 @@ without having to know the internal module layout.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -125,6 +126,27 @@ class RestoreDeviceResponse(BaseModel):
     device_token: str
 
 
+class DeviceLifecycleRequest(BaseModel):
+    reason: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class DeactivateDeviceResponse(BaseModel):
+    device_id: str
+    tenant_id: str
+    status: str
+    deactivated_at: datetime
+    token_revoked_at: datetime | None = None
+    revoked_tokens: bool = False
+
+
+class ReactivateDeviceResponse(BaseModel):
+    device_id: str
+    tenant_id: str
+    status: str
+    reactivated_at: datetime
+
+
 
 class DeviceAuthTokenSummary(BaseModel):
     id: str
@@ -146,6 +168,13 @@ class RevokeDeviceTokenResponse(BaseModel):
     status: str
     token_revoked_at: datetime
     device_token: str
+
+
+class RotateDeviceTokenResponse(BaseModel):
+    device_id: str
+    tenant_id: str
+    token: str
+    created_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -203,9 +232,13 @@ __all__ = [
     "RemoveAssignmentResponse",
     "DeleteDeviceResponse",
     "RestoreDeviceResponse",
+    "DeviceLifecycleRequest",
+    "DeactivateDeviceResponse",
+    "ReactivateDeviceResponse",
     "DeviceAuthTokenSummary",
     "DeviceTokensListResponse",
     "RevokeDeviceTokenResponse",
+    "RotateDeviceTokenResponse",
     # policy upsert
     "UpsertPolicyRequest",
     "UpsertPolicyResponse",
