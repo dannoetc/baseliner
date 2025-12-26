@@ -5,10 +5,18 @@ set -eu
 # The UI code should read window.__BASELINER_CONFIG__.API_BASE_URL
 API_BASE_URL="${UI_API_BASE_URL:-${API_BASE_URL:-}}"
 
+if [ -n "${API_BASE_URL}" ]; then
+  # Escape backslashes and double quotes for safe JS string literal.
+  ESCAPED="$(printf '%s' "$API_BASE_URL" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  VALUE="\"$ESCAPED\""
+else
+  VALUE="null"
+fi
+
 cat > /usr/share/nginx/html/config.js <<EOF
 // Generated at container start time.
 window.__BASELINER_CONFIG__ = {
-  API_BASE_URL: ${API_BASE_URL:+"$API_BASE_URL"}${API_BASE_URL:-null}
+  API_BASE_URL: $VALUE
 };
 EOF
 
