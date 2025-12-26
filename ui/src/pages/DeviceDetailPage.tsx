@@ -19,7 +19,7 @@ export default function DeviceDetailPage() {
     <div>
       <h2 style={{ marginTop: 0 }}>Device</h2>
       <p style={{ color: '#6b7280', marginTop: 0 }}>
-        This page uses <code>GET /api/v1/admin/devices/{{id}}/debug</code>.
+        This page uses <code>GET /api/v1/admin/devices/{deviceId ?? '{id}'}/debug</code>.
       </p>
 
       <h3>Summary</h3>
