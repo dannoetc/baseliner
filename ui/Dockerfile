@@ -1,8 +1,13 @@
 # Build stage
 FROM node:20-alpine AS build
 WORKDIR /app
+
+# Copy manifests first for better layer caching
 COPY ui/package*.json ./
-RUN npm ci
+
+# Use npm ci when a lockfile exists; otherwise fall back to npm install
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
 COPY ui/ ./
 RUN npm run build
 
